@@ -1,0 +1,1214 @@
+/*
+ * SixColor Stats — 由 build.mjs 从 src/*.ts 生成，请勿直接编辑。
+ */
+"use strict";
+var __hostRequire = typeof require === "function" ? require : null;
+var __modules = Object.create(null);
+var __cache = Object.create(null);
+
+function __resolve(from, id) {
+  var parts = from ? from.split("/") : [];
+  parts.pop();
+  var seg = id.split("/");
+  for (var i = 0; i < seg.length; i++) {
+    if (seg[i] === "." || seg[i] === "") continue;
+    if (seg[i] === "..") parts.pop();
+    else parts.push(seg[i]);
+  }
+  var base = parts.join("/");
+  var candidates = [base + ".ts", base + "/index.ts", base];
+  for (var j = 0; j < candidates.length; j++) {
+    if (__modules[candidates[j]]) return candidates[j];
+  }
+  return null;
+}
+
+function __require(id, from) {
+  var key = id.charAt(0) === "." ? __resolve(from, id) : id;
+  if (key && __modules[key]) {
+    if (__cache[key]) return __cache[key].exports;
+    var m = { exports: {} };
+    __cache[key] = m;
+    __modules[key](m, m.exports, function (rid) { return __require(rid, key); });
+    return m.exports;
+  }
+  if (__hostRequire) return __hostRequire(id);
+  throw new Error("无法解析模块: " + id);
+}
+__modules["counter.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.stripMarkdown = stripMarkdown;
+exports.countPlain = countPlain;
+exports.countMarkdown = countMarkdown;
+exports.diffCounts = diffCounts;
+const CJK_G = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
+const LATIN_G = /[A-Za-z0-9]+/g;
+function stripMarkdown(src, opts) {
+    let t = src.replace(/\r\n?/g, "\n");
+    if (!opts.countFrontmatter) {
+        t = t.replace(/^\uFEFF?---\n[\s\S]*?\n---[ \t]*(\n|$)/, "");
+    }
+    if (!opts.countCodeBlocks) {
+        t = t.replace(/^([ \t]*)(```|~~~)[^\n]*\n[\s\S]*?^\1\2[ \t]*$/gm, " ");
+        t = t.replace(/`[^`\n]*`/g, " ");
+    }
+    t = t.replace(/<!--[\s\S]*?-->/g, " ");
+    t = t.replace(/%%[\s\S]*?%%/g, " ");
+    t = t.replace(/!\[\[[^\]]*\]\]/g, " ");
+    t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, " ");
+    t = t.replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, (_m, _alias, label) => label !== null && label !== void 0 ? label : "");
+    t = t.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    t = t.replace(/https?:\/\/\S+/g, " ");
+    t = t.replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "");
+    t = t.replace(/^[ \t]{0,3}>[ \t]?/gm, "");
+    t = t.replace(/^[ \t]{0,3}[-*+][ \t]+\[[ xX]\][ \t]+/gm, "");
+    t = t.replace(/^[ \t]{0,3}([-*+]|\d+[.)])[ \t]+/gm, "");
+    t = t.replace(/^[ \t]*\|?[ \t:|-]*-[ \t:|-]*\|[ \t:|-]*$/gm, "");
+    t = t.replace(/\|/g, " ");
+    t = t.replace(/\*\*|__|~~|==|\*/g, "");
+    t = t.replace(/^[ \t]*\^[A-Za-z0-9-]+[ \t]*$/gm, "");
+    t = t.replace(/<%[\s\S]*?%>/g, " ");
+    t = t.replace(/\$\$[\s\S]*?\$\$/g, " ");
+    return t;
+}
+function countPlain(text) {
+    var _a, _b, _c, _d;
+    const cjk = (_b = (_a = text.match(CJK_G)) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : 0;
+    const lat = (_d = (_c = text.match(LATIN_G)) === null || _c === void 0 ? void 0 : _c.length) !== null && _d !== void 0 ? _d : 0;
+    return { cjk, lat };
+}
+function countMarkdown(src, opts) {
+    return countPlain(stripMarkdown(src, opts));
+}
+function diffCounts(prev, next, opts) {
+    if (prev === next)
+        return { add: { cjk: 0, lat: 0 }, del: { cjk: 0, lat: 0 } };
+    const maxStart = Math.min(prev.length, next.length);
+    let start = 0;
+    while (start < maxStart && prev.charCodeAt(start) === next.charCodeAt(start))
+        start++;
+    const maxEnd = Math.min(prev.length, next.length) - start;
+    let end = 0;
+    while (end < maxEnd &&
+        prev.charCodeAt(prev.length - 1 - end) === next.charCodeAt(next.length - 1 - end)) {
+        end++;
+    }
+    const addedPart = next.slice(start, next.length - end);
+    const removedPart = prev.slice(start, prev.length - end);
+    return {
+        add: countMarkdown(addedPart, opts),
+        del: countMarkdown(removedPart, opts),
+    };
+}
+
+};
+__modules["main.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.monthKey = void 0;
+const obsidian_1 = require("obsidian");
+const types_1 = require("./types");
+const store_1 = require("./store");
+Object.defineProperty(exports, "monthKey", { enumerable: true, get: function () { return store_1.monthKey; } });
+const scanner_1 = require("./scanner");
+const view_1 = require("./view");
+const settings_1 = require("./settings");
+const stats_1 = require("./stats");
+const WEEK_CHARS = ["日", "一", "二", "三", "四", "五", "六"];
+const LEDGER_TTL = 3000;
+class SixColorStats extends obsidian_1.Plugin {
+    constructor() {
+        super(...arguments);
+        this.settings = { ...types_1.DEFAULT_SETTINGS };
+        this.ledgerCache = new Map();
+        this.refreshTimer = null;
+        this.progress = null;
+        this.baseDir = "";
+    }
+    async onload() {
+        var _a;
+        await this.loadSettings();
+        this.baseDir = (_a = this.manifest.dir) !== null && _a !== void 0 ? _a : `.obsidian/plugins/${this.manifest.id}`;
+        const adapter = this.app.vault.adapter;
+        this.store = new store_1.StatsStore(this.baseDir, adapter, 1);
+        await this.store.load();
+        const io = {
+            listFiles: () => this.app.vault.getMarkdownFiles().map((f) => ({
+                path: f.path,
+                size: f.stat.size,
+                mtime: f.stat.mtime,
+            })),
+            readFile: async (path) => {
+                const f = this.app.vault.getAbstractFileByPath(path);
+                if (f instanceof obsidian_1.TFile)
+                    return this.app.vault.cachedRead(f);
+                throw new Error(`not a markdown file: ${path}`);
+            },
+            adapter,
+        };
+        this.scanner = new scanner_1.Scanner(io, this.store, () => this.settings, {
+            onProgress: (done, total) => {
+                this.progress = { done, total };
+                this.scheduleRefresh(120);
+            },
+            onChange: () => {
+                this.ledgerCache.clear();
+                this.scheduleRefresh(200);
+            },
+        });
+        this.registerView(view_1.VIEW_TYPE_STATS, (leaf) => new view_1.StatsView(leaf, () => this.rebuild()));
+        this.statusBar = this.addStatusBarItem();
+        this.statusBar.addClass("scs-statusbar");
+        this.statusBar.setText("统计中…");
+        this.statusBar.onclick = () => void this.activateView();
+        this.statusBar.title = "点击打开字数统计面板";
+        this.addRibbonIcon("calculator", "字数统计", () => void this.activateView());
+        this.addCommand({
+            id: "open-panel",
+            name: "打开统计面板",
+            callback: () => void this.activateView(),
+        });
+        this.addCommand({
+            id: "rebuild",
+            name: "重建全库快照",
+            callback: () => void this.rebuild(),
+        });
+        this.addSettingTab(new settings_1.StatsSettingTab(this.app, this));
+        this.registerEvent(this.app.vault.on("modify", (f) => {
+            if (f instanceof obsidian_1.TFile && f.extension === "md")
+                this.scanner.scheduleEdit(f.path);
+        }));
+        this.registerEvent(this.app.vault.on("create", (f) => {
+            if (f instanceof obsidian_1.TFile && f.extension === "md")
+                this.scanner.scheduleEdit(f.path);
+        }));
+        this.registerEvent(this.app.vault.on("rename", (f, oldPath) => {
+            if (f instanceof obsidian_1.TFile && f.extension === "md")
+                this.scanner.handleRename(oldPath, f.path);
+        }));
+        this.registerEvent(this.app.vault.on("delete", (f) => {
+            if (f instanceof obsidian_1.TFile && f.extension === "md")
+                void this.scanner.handleDelete(f.path);
+        }));
+        this.registerInterval(window.setInterval(() => void this.refresh(), 60000));
+        this.app.workspace.onLayoutReady(() => {
+            void this.initialScan();
+        });
+    }
+    onunload() {
+        var _a;
+        if (this.refreshTimer !== null)
+            window.clearTimeout(this.refreshTimer);
+        void ((_a = this.store) === null || _a === void 0 ? void 0 : _a.flushSave());
+        this.app.workspace.detachLeavesOfType(view_1.VIEW_TYPE_STATS);
+    }
+    async initialScan() {
+        const res = await this.scanner.fullScan(false);
+        this.progress = null;
+        if (res.baseline && res.files > 0) {
+            new obsidian_1.Notice(`已建立快照：${res.files} 个文件。从今天起开始记账。`);
+        }
+        await this.refresh();
+    }
+    async rebuild() {
+        new obsidian_1.Notice("正在重建快照…");
+        this.store.clear();
+        const res = await this.scanner.fullScan(true);
+        this.ledgerCache.clear();
+        this.progress = null;
+        await this.refresh();
+        new obsidian_1.Notice(`快照已重建：${res.files} 个文件。账本未改动。`);
+    }
+    async applySettings(kinds) {
+        await this.saveData(this.settings);
+        if (kinds.includes("counter") || kinds.includes("scan")) {
+            await this.rebuild();
+        }
+        else {
+            await this.refresh();
+        }
+    }
+    scheduleRefresh(delay = 250) {
+        if (this.refreshTimer !== null)
+            window.clearTimeout(this.refreshTimer);
+        this.refreshTimer = window.setTimeout(() => {
+            this.refreshTimer = null;
+            void this.refresh();
+        }, delay);
+    }
+    async refresh() {
+        if (!this.store)
+            return;
+        const data = await this.buildPanelData();
+        const view = this.getView();
+        if (view)
+            view.setData(data);
+        this.updateStatusBar(data);
+    }
+    updateStatusBar(data) {
+        if (!this.statusBar)
+            return;
+        const today = data.todayAdd.cjk + data.todayAdd.lat;
+        this.statusBar.setText(today === 0 ? "今日 +0" : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`);
+        this.statusBar.title =
+            `本周 汉字 ${data.weekAdd.cjk.toLocaleString("en-US")} / 词 ${data.weekAdd.lat.toLocaleString("en-US")}\n` +
+                `全库 汉字 ${data.total.cjk.toLocaleString("en-US")} / 词 ${data.total.lat.toLocaleString("en-US")}\n` +
+                `点击打开面板`;
+    }
+    async buildPanelData() {
+        var _a, _b, _c, _d;
+        const now = Date.now();
+        const chartDays = Math.max(1, this.settings.chartDays);
+        const chartFrom = (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(chartDays - 1));
+        const from = Math.min((0, stats_1.startOfMonth)(now), (0, stats_1.startOfWeek)(now), chartFrom);
+        const entries = await this.readMonths((0, stats_1.monthsBetween)(from, now + 1));
+        const todayAdd = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1).add;
+        const editDel = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1).del;
+        const fileDel = (0, stats_1.sumDeletions)(entries, (0, stats_1.startOfDay)(now), now + 1).del;
+        const todayDel = (0, types_1.vec)(editDel.cjk + fileDel.cjk, editDel.lat + fileDel.lat);
+        const perDay = (0, stats_1.byDay)(entries);
+        const days = [];
+        for (let i = 0; i < chartDays; i++) {
+            const ts = (0, stats_1.addDays)(chartFrom, i);
+            const key = (0, store_1.dayKey)(ts);
+            days.push({
+                day: key,
+                label: WEEK_CHARS[new Date(ts).getDay()],
+                vec: (_a = perDay.get(key)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0),
+                isToday: key === (0, store_1.dayKey)(now),
+            });
+        }
+        const active = this.app.workspace.getActiveFile();
+        const rec = active ? this.store.get(active.path) : undefined;
+        return {
+            todayAdd,
+            todayDel,
+            weekAdd: (0, stats_1.sumWriting)(entries, (0, stats_1.startOfWeek)(now), now + 1).add,
+            monthAdd: (0, stats_1.sumWriting)(entries, (0, stats_1.startOfMonth)(now), now + 1).add,
+            total: this.store.total(),
+            fileCount: this.store.size(),
+            current: active && rec ? { path: active.path, vec: rec.vec } : undefined,
+            days,
+            scanning: (_c = (_b = this.scanner) === null || _b === void 0 ? void 0 : _b.isScanning) !== null && _c !== void 0 ? _c : false,
+            progress: (_d = this.progress) !== null && _d !== void 0 ? _d : undefined,
+            updatedAt: now,
+        };
+    }
+    async readMonths(yms) {
+        const out = [];
+        const now = Date.now();
+        for (const ym of yms) {
+            const hit = this.ledgerCache.get(ym);
+            if (hit && now - hit.at < LEDGER_TTL) {
+                out.push(...hit.entries);
+                continue;
+            }
+            const entries = await this.store.readMonth(ym);
+            this.ledgerCache.set(ym, { at: now, entries });
+            out.push(...entries);
+        }
+        return out;
+    }
+    async activateView() {
+        const { workspace } = this.app;
+        const existing = workspace.getLeavesOfType(view_1.VIEW_TYPE_STATS);
+        if (existing.length > 0) {
+            await workspace.revealLeaf(existing[0]);
+            return;
+        }
+        const leaf = workspace.getRightLeaf(false);
+        if (!leaf)
+            return;
+        await leaf.setViewState({ type: view_1.VIEW_TYPE_STATS, active: true });
+        await workspace.revealLeaf(leaf);
+    }
+    getView() {
+        const leaves = this.app.workspace.getLeavesOfType(view_1.VIEW_TYPE_STATS);
+        if (leaves.length === 0)
+            return null;
+        return leaves[0].view;
+    }
+    async loadSettings() {
+        const raw = (await this.loadData());
+        this.settings = Object.assign({}, types_1.DEFAULT_SETTINGS, raw !== null && raw !== void 0 ? raw : {});
+        if (!Array.isArray(this.settings.excludeFolders)) {
+            this.settings.excludeFolders = [...types_1.DEFAULT_SETTINGS.excludeFolders];
+        }
+    }
+    async saveSettings() {
+        await this.saveData(this.settings);
+    }
+}
+exports.default = SixColorStats;
+
+};
+__modules["scanner.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Scanner = void 0;
+const types_1 = require("./types");
+const counter_1 = require("./counter");
+const TEXT_CACHE_LIMIT = 32;
+class Scanner {
+    constructor(io, store, getSettings, cb = {}) {
+        this.io = io;
+        this.store = store;
+        this.getSettings = getSettings;
+        this.cb = cb;
+        this.timers = new Map();
+        this.textCache = new Map();
+        this.scanning = false;
+    }
+    get isScanning() {
+        return this.scanning;
+    }
+    isExcluded(path) {
+        var _a;
+        const list = (_a = this.getSettings().excludeFolders) !== null && _a !== void 0 ? _a : [];
+        for (const raw of list) {
+            const f = raw.trim().replace(/^\/+|\/+$/g, "");
+            if (!f)
+                continue;
+            if (path === f || path.startsWith(f + "/"))
+                return true;
+        }
+        return false;
+    }
+    async fullScan(rebaseline = false) {
+        var _a, _b, _c, _d, _e, _f, _g, _h;
+        if (this.scanning)
+            return { files: 0, changed: 0, baseline: false };
+        this.scanning = true;
+        const opts = this.getSettings();
+        if (rebaseline)
+            this.store.clear();
+        const firstRun = this.store.size() === 0;
+        const files = this.io.listFiles().filter((f) => !this.isExcluded(f.path));
+        const seen = new Set();
+        const entries = [];
+        let changed = 0;
+        let done = 0;
+        try {
+            for (const f of files) {
+                seen.add(f.path);
+                const rec = this.store.get(f.path);
+                done++;
+                if (rec && rec.size === f.size && rec.mtime === f.mtime) {
+                    if (done % 200 === 0)
+                        (_b = (_a = this.cb).onProgress) === null || _b === void 0 ? void 0 : _b.call(_a, done, files.length);
+                    continue;
+                }
+                const text = await this.io.readFile(f.path);
+                const v = (0, counter_1.countMarkdown)(text, opts);
+                changed++;
+                if (rec) {
+                    const { add, del } = this.splitDelta(rec.vec, v);
+                    if (!(0, types_1.isZeroVec)(add) || !(0, types_1.isZeroVec)(del)) {
+                        entries.push({ t: Date.now(), p: f.path, add: toTuple(add), del: toTuple(del), src: "scan" });
+                    }
+                }
+                else if (!firstRun) {
+                    entries.push({
+                        t: Date.now(),
+                        p: f.path,
+                        add: toTuple(v),
+                        del: [0, 0],
+                        src: "scan",
+                    });
+                }
+                this.store.set(f.path, { size: f.size, mtime: f.mtime, vec: v });
+                if (this.textCache.size < TEXT_CACHE_LIMIT)
+                    this.textCache.set(f.path, text);
+                if (done % 50 === 0) {
+                    (_d = (_c = this.cb).onProgress) === null || _d === void 0 ? void 0 : _d.call(_c, done, files.length);
+                    await yieldToUi();
+                }
+            }
+            for (const [path, rec] of this.store.entries()) {
+                if (seen.has(path))
+                    continue;
+                entries.push({
+                    t: Date.now(),
+                    p: path,
+                    add: [0, 0],
+                    del: toTuple(rec.vec),
+                    src: "delete",
+                });
+                this.store.remove(path);
+            }
+            await this.store.append(entries);
+            await this.store.saveSnapshot();
+            (_f = (_e = this.cb).onProgress) === null || _f === void 0 ? void 0 : _f.call(_e, files.length, files.length);
+            return { files: files.length, changed, baseline: firstRun };
+        }
+        finally {
+            this.scanning = false;
+            (_h = (_g = this.cb).onChange) === null || _h === void 0 ? void 0 : _h.call(_g);
+        }
+    }
+    scheduleEdit(path) {
+        if (this.isExcluded(path))
+            return;
+        const old = this.timers.get(path);
+        if (old !== undefined)
+            window.clearTimeout(old);
+        const settings = this.getSettings();
+        const timer = window.setTimeout(() => {
+            this.timers.delete(path);
+            void this.processEdit(path);
+        }, Math.max(100, settings.debounceMs));
+        this.timers.set(path, timer);
+    }
+    handleRename(oldPath, newPath) {
+        var _a, _b;
+        if (this.isExcluded(newPath)) {
+            this.store.remove(oldPath);
+            return;
+        }
+        this.store.rename(oldPath, newPath);
+        const cached = this.textCache.get(oldPath);
+        if (cached !== undefined) {
+            this.textCache.delete(oldPath);
+            this.textCache.set(newPath, cached);
+        }
+        (_b = (_a = this.cb).onChange) === null || _b === void 0 ? void 0 : _b.call(_a);
+    }
+    async handleDelete(path) {
+        var _a, _b;
+        const rec = this.store.remove(path);
+        this.textCache.delete(path);
+        if (!rec)
+            return;
+        await this.store.append([
+            { t: Date.now(), p: path, add: [0, 0], del: toTuple(rec.vec), src: "delete" },
+        ]);
+        await this.store.saveSnapshot();
+        (_b = (_a = this.cb).onChange) === null || _b === void 0 ? void 0 : _b.call(_a);
+    }
+    async flush() {
+        for (const [, timer] of this.timers)
+            window.clearTimeout(timer);
+        this.timers.clear();
+        await this.store.saveSnapshot();
+    }
+    async processEdit(path) {
+        var _a, _b, _c, _d, _e, _f, _g, _h;
+        const opts = this.getSettings();
+        let text;
+        try {
+            text = await this.io.readFile(path);
+        }
+        catch (_j) {
+            return;
+        }
+        const v = (0, counter_1.countMarkdown)(text, opts);
+        const rec = this.store.get(path);
+        const prevText = this.textCache.get(path);
+        let add;
+        let del;
+        if (prevText !== undefined) {
+            const d = (0, counter_1.diffCounts)(prevText, text, opts);
+            add = d.add;
+            del = d.del;
+        }
+        else if (rec) {
+            const d = this.splitDelta(rec.vec, v);
+            add = d.add;
+            del = d.del;
+        }
+        else {
+            add = v;
+            del = (0, types_1.vec)(0, 0);
+        }
+        this.textCache.set(path, text);
+        if (this.textCache.size > TEXT_CACHE_LIMIT) {
+            const first = this.textCache.keys().next().value;
+            if (first !== undefined && first !== path)
+                this.textCache.delete(first);
+        }
+        try {
+            const stat = this.io.listFiles().find((f) => f.path === path);
+            this.store.set(path, {
+                size: (_b = (_a = stat === null || stat === void 0 ? void 0 : stat.size) !== null && _a !== void 0 ? _a : rec === null || rec === void 0 ? void 0 : rec.size) !== null && _b !== void 0 ? _b : 0,
+                mtime: (_d = (_c = stat === null || stat === void 0 ? void 0 : stat.mtime) !== null && _c !== void 0 ? _c : rec === null || rec === void 0 ? void 0 : rec.mtime) !== null && _d !== void 0 ? _d : 0,
+                vec: v,
+            });
+        }
+        catch (_k) {
+            this.store.set(path, { size: (_e = rec === null || rec === void 0 ? void 0 : rec.size) !== null && _e !== void 0 ? _e : 0, mtime: (_f = rec === null || rec === void 0 ? void 0 : rec.mtime) !== null && _f !== void 0 ? _f : 0, vec: v });
+        }
+        if (!(0, types_1.isZeroVec)(add) || !(0, types_1.isZeroVec)(del)) {
+            await this.store.append([
+                { t: Date.now(), p: path, add: toTuple(add), del: toTuple(del), src: "edit" },
+            ]);
+        }
+        this.store.scheduleSave();
+        (_h = (_g = this.cb).onChange) === null || _h === void 0 ? void 0 : _h.call(_g);
+    }
+    splitDelta(prev, next) {
+        const d = (0, types_1.subVec)(next, prev);
+        return {
+            add: (0, types_1.vec)(Math.max(0, d.cjk), Math.max(0, d.lat)),
+            del: (0, types_1.vec)(Math.max(0, -d.cjk), Math.max(0, -d.lat)),
+        };
+    }
+}
+exports.Scanner = Scanner;
+function toTuple(v) {
+    return [v.cjk, v.lat];
+}
+function yieldToUi() {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+};
+__modules["settings.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.StatsSettingTab = void 0;
+exports.applyToSettings = applyToSettings;
+const obsidian_1 = require("obsidian");
+class StatsSettingTab extends obsidian_1.PluginSettingTab {
+    constructor(app, plugin) {
+        super(app, plugin);
+        this.plugin = plugin;
+    }
+    display() {
+        const { containerEl } = this;
+        containerEl.empty();
+        const s = this.plugin.settings;
+        containerEl.createEl("h3", { text: "统计口径" });
+        containerEl.createEl("p", {
+            cls: "setting-item-description",
+            text: "改动这里会让插件重建快照（不产生写作记录），历史账本不受影响。",
+        });
+        new obsidian_1.Setting(containerEl)
+            .setName("计入 YAML frontmatter")
+            .setDesc("默认不计入：属性区是元数据，不是正文。")
+            .addToggle((t) => t.setValue(s.countFrontmatter).onChange(async (v) => {
+            s.countFrontmatter = v;
+            await this.plugin.applySettings(["counter"]);
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName("计入代码块与行内代码")
+            .setDesc("默认不计入。")
+            .addToggle((t) => t.setValue(s.countCodeBlocks).onChange(async (v) => {
+            s.countCodeBlocks = v;
+            await this.plugin.applySettings(["counter"]);
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName("排除的文件夹")
+            .setDesc("每行一个，相对库根目录；这些目录不扫描、不统计。")
+            .addTextArea((t) => {
+            t.setValue(s.excludeFolders.join("\n"));
+            t.inputEl.rows = 4;
+            t.inputEl.addClass("scs-textarea");
+            t.onChange(async (v) => {
+                s.excludeFolders = v
+                    .split("\n")
+                    .map((x) => x.trim())
+                    .filter(Boolean);
+                await this.plugin.applySettings(["scan"]);
+            });
+        });
+        containerEl.createEl("h3", { text: "显示" });
+        new obsidian_1.Setting(containerEl)
+            .setName("主指标包含英文词")
+            .setDesc("关闭时状态栏与排序只看汉字；两个分量在面板里始终分开显示。")
+            .addToggle((t) => t.setValue(s.includeLatinInPrimary).onChange(async (v) => {
+            s.includeLatinInPrimary = v;
+            await this.plugin.applySettings(["display"]);
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName("柱状图天数")
+            .addSlider((sl) => sl
+            .setLimits(7, 30, 1)
+            .setValue(s.chartDays)
+            .setDynamicTooltip()
+            .onChange(async (v) => {
+            s.chartDays = v;
+            await this.plugin.applySettings(["display"]);
+        }));
+        containerEl.createEl("h3", { text: "数据" });
+        containerEl.createEl("p", {
+            cls: "setting-item-description",
+            text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量，ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
+        });
+        new obsidian_1.Setting(containerEl).setName("立即重建快照").addButton((b) => b.setButtonText("重建").onClick(() => void this.plugin.rebuild()));
+    }
+}
+exports.StatsSettingTab = StatsSettingTab;
+function applyToSettings(target, patch) {
+    return Object.assign({}, target, patch);
+}
+
+};
+__modules["stats.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.emptySum = emptySum;
+exports.addToSum = addToSum;
+exports.sumWriting = sumWriting;
+exports.sumDeletions = sumDeletions;
+exports.byDay = byDay;
+exports.daysWithWriting = daysWithWriting;
+exports.streakFrom = streakFrom;
+exports.parseProjectRules = parseProjectRules;
+exports.projectOf = projectOf;
+exports.isExcludedPath = isExcludedPath;
+exports.startOfDay = startOfDay;
+exports.startOfWeek = startOfWeek;
+exports.startOfMonth = startOfMonth;
+exports.addDays = addDays;
+exports.monthsBetween = monthsBetween;
+exports.isWritingEntry = isWritingEntry;
+exports.isoWeek = isoWeek;
+exports.fmtDate = fmtDate;
+exports.weekdayCN = weekdayCN;
+const types_1 = require("./types");
+const store_1 = require("./store");
+const WRITE_SRC = new Set(["edit", "scan"]);
+function emptySum() {
+    return { add: (0, types_1.vec)(0, 0), del: (0, types_1.vec)(0, 0), n: 0 };
+}
+function addToSum(sum, e) {
+    return {
+        add: (0, types_1.addVec)(sum.add, (0, types_1.vec)(e.add[0], e.add[1])),
+        del: (0, types_1.addVec)(sum.del, (0, types_1.vec)(e.del[0], e.del[1])),
+        n: sum.n + 1,
+    };
+}
+function sumWriting(entries, from, to) {
+    let s = emptySum();
+    for (const e of entries) {
+        if (e.t < from || e.t >= to)
+            continue;
+        if (!WRITE_SRC.has(e.src))
+            continue;
+        s = addToSum(s, e);
+    }
+    return s;
+}
+function sumDeletions(entries, from, to) {
+    let s = emptySum();
+    for (const e of entries) {
+        if (e.t < from || e.t >= to)
+            continue;
+        if (e.src !== "delete")
+            continue;
+        s = addToSum(s, e);
+    }
+    return s;
+}
+function byDay(entries) {
+    var _a;
+    const out = new Map();
+    for (const e of entries) {
+        if (!WRITE_SRC.has(e.src))
+            continue;
+        const k = (0, store_1.dayKey)(e.t);
+        const cur = (_a = out.get(k)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0);
+        out.set(k, (0, types_1.addVec)(cur, (0, types_1.vec)(e.add[0], e.add[1])));
+    }
+    return out;
+}
+function daysWithWriting(entries) {
+    const out = new Set();
+    for (const e of entries) {
+        if (!WRITE_SRC.has(e.src))
+            continue;
+        if ((0, types_1.isZeroVec)((0, types_1.vec)(e.add[0], e.add[1])))
+            continue;
+        out.add((0, store_1.dayKey)(e.t));
+    }
+    return out;
+}
+function streakFrom(days, today = Date.now()) {
+    let n = 0;
+    const base = startOfDay(today);
+    for (let i = 0; i < 3650; i++) {
+        const key = (0, store_1.dayKey)(addDays(base, -i));
+        if (days.has(key)) {
+            n++;
+        }
+        else if (i === 0) {
+            continue;
+        }
+        else {
+            break;
+        }
+    }
+    return n;
+}
+function parseProjectRules(lines) {
+    var _a;
+    const out = [];
+    for (const raw of lines) {
+        const line = raw.trim();
+        if (!line || line.startsWith("#"))
+            continue;
+        const eq = line.indexOf("=");
+        if (eq === -1) {
+            const prefix = normalizePrefix(line);
+            if (!prefix)
+                continue;
+            out.push({ name: (_a = prefix.split("/").pop()) !== null && _a !== void 0 ? _a : prefix, prefix });
+        }
+        else {
+            const name = line.slice(0, eq).trim();
+            const prefix = normalizePrefix(line.slice(eq + 1));
+            if (!name || !prefix)
+                continue;
+            out.push({ name, prefix });
+        }
+    }
+    return out.sort((a, b) => b.prefix.length - a.prefix.length);
+}
+function normalizePrefix(s) {
+    return s
+        .trim()
+        .replace(/^\/+|\/+$/g, "")
+        .replace(/\\/g, "/");
+}
+function projectOf(path, rules, depth = 2) {
+    for (const r of rules) {
+        if (path === r.prefix || path.startsWith(r.prefix + "/"))
+            return r.name;
+    }
+    const parts = path.split("/");
+    if (parts.length <= 1)
+        return "（根目录）";
+    return parts.slice(0, Math.min(depth, parts.length - 1)).join("/");
+}
+function isExcludedPath(path, settings) {
+    var _a;
+    const prefixes = [...((_a = settings.excludeFolders) !== null && _a !== void 0 ? _a : [])];
+    if (settings.reportFolder)
+        prefixes.push(settings.reportFolder);
+    for (const raw of prefixes) {
+        const f = normalizePrefix(raw);
+        if (!f)
+            continue;
+        if (path === f || path.startsWith(f + "/"))
+            return true;
+    }
+    return false;
+}
+function startOfDay(ts = Date.now()) {
+    const d = new Date(ts);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+}
+function startOfWeek(ts = Date.now()) {
+    const d = new Date(startOfDay(ts));
+    const dow = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - dow);
+    return d.getTime();
+}
+function startOfMonth(ts = Date.now()) {
+    const d = new Date(ts);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(1);
+    return d.getTime();
+}
+function addDays(ts, n) {
+    const d = new Date(ts);
+    d.setDate(d.getDate() + n);
+    return d.getTime();
+}
+function monthsBetween(from, to) {
+    const out = [];
+    const d = new Date(from);
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    while (d.getTime() < to) {
+        out.push((0, store_1.monthKey)(d.getTime()));
+        d.setMonth(d.getMonth() + 1);
+    }
+    if (out.length === 0)
+        out.push((0, store_1.monthKey)(to));
+    return out;
+}
+function isWritingEntry(e) {
+    return WRITE_SRC.has(e.src) && !(0, types_1.isZeroVec)((0, types_1.vec)(e.add[0], e.add[1]));
+}
+function isoWeek(ts = Date.now()) {
+    const d = new Date(ts);
+    const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = (target.getUTCDay() + 6) % 7;
+    target.setUTCDate(target.getUTCDate() - dayNum + 3);
+    const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+    const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+    firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+    const week = 1 + Math.round((target.getTime() - firstThursday.getTime()) / 604800000);
+    return `${target.getUTCFullYear()}-W${`${week}`.padStart(2, "0")}`;
+}
+function fmtDate(ts) {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}-${`${d.getDate()}`.padStart(2, "0")}`;
+}
+function weekdayCN(ts) {
+    return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][new Date(ts).getDay()];
+}
+
+};
+__modules["store.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ZERO = exports.StatsStore = void 0;
+exports.parseLedger = parseLedger;
+exports.monthKey = monthKey;
+exports.dayKey = dayKey;
+const types_1 = require("./types");
+Object.defineProperty(exports, "ZERO", { enumerable: true, get: function () { return types_1.ZERO; } });
+const SNAPSHOT_REL = "stats/snapshot.json";
+const LEDGER_REL = "stats/ledger";
+class StatsStore {
+    constructor(baseDir, adapter, snapshotVersion = 1) {
+        this.baseDir = baseDir;
+        this.adapter = adapter;
+        this.snapshotVersion = snapshotVersion;
+        this.records = new Map();
+        this.loaded = false;
+        this.saveTimer = null;
+    }
+    get isLoaded() {
+        return this.loaded;
+    }
+    clear() {
+        this.records.clear();
+    }
+    entries() {
+        return [...this.records.entries()];
+    }
+    get(path) {
+        return this.records.get(path);
+    }
+    size() {
+        return this.records.size;
+    }
+    set(path, rec) {
+        this.records.set(path, rec);
+    }
+    remove(path) {
+        const r = this.records.get(path);
+        this.records.delete(path);
+        return r;
+    }
+    rename(oldPath, newPath) {
+        const r = this.records.get(oldPath);
+        if (!r)
+            return;
+        this.records.delete(oldPath);
+        this.records.set(newPath, r);
+    }
+    total() {
+        let cjk = 0;
+        let lat = 0;
+        for (const [, r] of this.records) {
+            cjk += r.vec.cjk;
+            lat += r.vec.lat;
+        }
+        return (0, types_1.vec)(cjk, lat);
+    }
+    async load() {
+        var _a, _b;
+        try {
+            const raw = await this.adapter.read(this.path(SNAPSHOT_REL));
+            const data = JSON.parse(raw);
+            if (data === null || data === void 0 ? void 0 : data.files) {
+                for (const [path, r] of Object.entries(data.files)) {
+                    if (!r || !Array.isArray(r.c))
+                        continue;
+                    this.records.set(path, { size: (_a = r.s) !== null && _a !== void 0 ? _a : 0, mtime: (_b = r.m) !== null && _b !== void 0 ? _b : 0, vec: (0, types_1.vec)(r.c[0], r.c[1]) });
+                }
+            }
+        }
+        catch (_c) {
+        }
+        this.loaded = true;
+    }
+    async saveSnapshot() {
+        const files = {};
+        for (const [path, r] of this.records) {
+            files[path] = { s: r.size, m: r.mtime, c: [r.vec.cjk, r.vec.lat] };
+        }
+        const payload = JSON.stringify({ version: this.snapshotVersion, updatedAt: Date.now(), files });
+        await this.ensureDir("stats");
+        await this.adapter.write(this.path(SNAPSHOT_REL), payload);
+    }
+    scheduleSave(delay = 4000) {
+        if (this.saveTimer !== null)
+            window.clearTimeout(this.saveTimer);
+        this.saveTimer = window.setTimeout(() => {
+            this.saveTimer = null;
+            void this.saveSnapshot();
+        }, delay);
+    }
+    async flushSave() {
+        if (this.saveTimer !== null) {
+            window.clearTimeout(this.saveTimer);
+            this.saveTimer = null;
+        }
+        if (this.loaded)
+            await this.saveSnapshot();
+    }
+    async append(entries) {
+        if (entries.length === 0)
+            return;
+        const byMonth = new Map();
+        for (const e of entries) {
+            if ((0, types_1.isZeroVec)((0, types_1.vec)(e.add[0], e.add[1])) && (0, types_1.isZeroVec)((0, types_1.vec)(e.del[0], e.del[1])))
+                continue;
+            const ym = monthKey(e.t);
+            const line = JSON.stringify(e);
+            const arr = byMonth.get(ym);
+            if (arr)
+                arr.push(line);
+            else
+                byMonth.set(ym, [line]);
+        }
+        if (byMonth.size === 0)
+            return;
+        await this.ensureDir("stats");
+        await this.ensureDir(LEDGER_REL);
+        for (const [ym, lines] of byMonth) {
+            const rel = this.ledgerPath(ym);
+            let prev = "";
+            try {
+                prev = await this.adapter.read(this.path(rel));
+            }
+            catch (_a) {
+                prev = "";
+            }
+            const next = (prev && !prev.endsWith("\n") ? prev + "\n" : prev) + lines.join("\n") + "\n";
+            await this.adapter.write(this.path(rel), next);
+        }
+    }
+    async readMonth(ym) {
+        try {
+            const raw = await this.adapter.read(this.path(this.ledgerPath(ym)));
+            return parseLedger(raw);
+        }
+        catch (_a) {
+            return [];
+        }
+    }
+    async readMonths(yms) {
+        const out = [];
+        for (const ym of yms)
+            out.push(...(await this.readMonth(ym)));
+        return out;
+    }
+    path(rel) {
+        const base = this.baseDir.replace(/\/+$/, "");
+        return base ? `${base}/${rel}` : rel;
+    }
+    ledgerPath(ym) {
+        return `${LEDGER_REL}/${ym}.jsonl`;
+    }
+    async ensureDir(rel) {
+        const p = this.path(rel);
+        try {
+            if (!(await this.adapter.exists(p)))
+                await this.adapter.mkdir(p);
+        }
+        catch (_a) {
+        }
+    }
+}
+exports.StatsStore = StatsStore;
+function parseLedger(raw) {
+    const out = [];
+    for (const line of raw.split("\n")) {
+        const s = line.trim();
+        if (!s)
+            continue;
+        try {
+            const e = JSON.parse(s);
+            if (typeof e.t === "number" && typeof e.p === "string" && Array.isArray(e.add))
+                out.push(e);
+        }
+        catch (_a) {
+        }
+    }
+    return out;
+}
+function monthKey(ts) {
+    const d = new Date(ts);
+    const m = `${d.getMonth() + 1}`.padStart(2, "0");
+    return `${d.getFullYear()}-${m}`;
+}
+function dayKey(ts) {
+    const d = new Date(ts);
+    const m = `${d.getMonth() + 1}`.padStart(2, "0");
+    const day = `${d.getDate()}`.padStart(2, "0");
+    return `${d.getFullYear()}-${m}-${day}`;
+}
+
+};
+__modules["types.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_SETTINGS = exports.ZERO = void 0;
+exports.vec = vec;
+exports.addVec = addVec;
+exports.subVec = subVec;
+exports.clampVec = clampVec;
+exports.isZeroVec = isZeroVec;
+exports.primaryOf = primaryOf;
+exports.entryAddVec = entryAddVec;
+exports.entryDelVec = entryDelVec;
+exports.ZERO = Object.freeze({ cjk: 0, lat: 0 });
+function vec(cjk = 0, lat = 0) {
+    return { cjk, lat };
+}
+function addVec(a, b) {
+    return { cjk: a.cjk + b.cjk, lat: a.lat + b.lat };
+}
+function subVec(a, b) {
+    return { cjk: a.cjk - b.cjk, lat: a.lat - b.lat };
+}
+function clampVec(a) {
+    return { cjk: Math.max(0, a.cjk), lat: Math.max(0, a.lat) };
+}
+function isZeroVec(a) {
+    return a.cjk === 0 && a.lat === 0;
+}
+function primaryOf(a, includeLatin) {
+    return includeLatin ? a.cjk + a.lat : a.cjk;
+}
+exports.DEFAULT_SETTINGS = {
+    countFrontmatter: false,
+    countCodeBlocks: false,
+    excludeFolders: [".trash"],
+    includeLatinInPrimary: false,
+    panelRange: 7,
+    chartDays: 14,
+    debounceMs: 2500,
+    projectRules: [],
+    reportFolder: "归档/统计归档",
+};
+function entryAddVec(e) {
+    return vec(e.add[0], e.add[1]);
+}
+function entryDelVec(e) {
+    return vec(e.del[0], e.del[1]);
+}
+
+};
+__modules["view.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.StatsView = exports.VIEW_TYPE_STATS = void 0;
+const obsidian_1 = require("obsidian");
+exports.VIEW_TYPE_STATS = "sixcolor-stats-view";
+const fmt = (n) => n.toLocaleString("en-US");
+class StatsView extends obsidian_1.ItemView {
+    constructor(leaf, onRescan) {
+        super(leaf);
+        this.onRescan = onRescan;
+        this.data = null;
+    }
+    getViewType() {
+        return exports.VIEW_TYPE_STATS;
+    }
+    getDisplayText() {
+        return "字数统计";
+    }
+    getIcon() {
+        return "calculator";
+    }
+    async onOpen() {
+        this.render();
+    }
+    async onClose() {
+        this.contentEl.empty();
+    }
+    setData(data) {
+        this.data = data;
+        this.render();
+    }
+    render() {
+        var _a;
+        const root = this.contentEl;
+        root.empty();
+        root.addClass("scs-panel");
+        const header = root.createDiv({ cls: "scs-header" });
+        header.createDiv({ cls: "scs-title", text: "今日" });
+        const refresh = header.createEl("button", { cls: "scs-icon-btn", attr: { "aria-label": "重新扫描" } });
+        (0, obsidian_1.setIcon)(refresh, "refresh-cw");
+        refresh.onclick = () => this.onRescan();
+        if (!this.data) {
+            root.createDiv({ cls: "scs-empty", text: "正在读取…" });
+            return;
+        }
+        const d = this.data;
+        if (d.scanning && d.progress) {
+            const p = root.createDiv({ cls: "scs-progress" });
+            p.createDiv({
+                cls: "scs-progress-text",
+                text: `扫描中 ${d.progress.done} / ${d.progress.total}`,
+            });
+        }
+        const hero = root.createDiv({ cls: "scs-hero" });
+        hero.createDiv({ cls: "scs-hero-num", text: fmt(d.todayAdd.cjk) });
+        hero.createDiv({ cls: "scs-hero-unit", text: "汉字" });
+        const heroSub = root.createDiv({ cls: "scs-hero-sub" });
+        heroSub.createSpan({ text: `英文词 ${fmt(d.todayAdd.lat)}` });
+        if (d.todayDel.cjk > 0 || d.todayDel.lat > 0) {
+            heroSub.createSpan({
+                cls: "scs-del",
+                text: `　删改 −${fmt(d.todayDel.cjk)} / −${fmt(d.todayDel.lat)}`,
+            });
+        }
+        const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
+        const chart = chartWrap.createDiv({ cls: "scs-chart" });
+        const max = Math.max(1, ...d.days.map((x) => x.vec.cjk + x.vec.lat));
+        for (const bar of d.days) {
+            const value = bar.vec.cjk + bar.vec.lat;
+            const col = chart.createDiv({ cls: "scs-bar-col" });
+            if (bar.isToday)
+                col.addClass("is-today");
+            const track = col.createDiv({ cls: "scs-bar-track" });
+            const h = value <= 0 ? 0 : Math.max(4, Math.round((value / max) * 100));
+            track.createDiv({ cls: "scs-bar", attr: { style: `height:${h}%` } });
+            col.createDiv({ cls: "scs-bar-label", text: bar.label });
+            col.setAttr("aria-label", `${bar.day}　汉字 ${fmt(bar.vec.cjk)}　英文词 ${fmt(bar.vec.lat)}`);
+            col.title = `${bar.day}　汉字 ${fmt(bar.vec.cjk)}　英文词 ${fmt(bar.vec.lat)}`;
+        }
+        const grid = root.createDiv({ cls: "scs-grid" });
+        this.metric(grid, "本周", d.weekAdd);
+        this.metric(grid, "本月", d.monthAdd);
+        this.metric(grid, "全库", d.total);
+        if (d.current) {
+            const cur = root.createDiv({ cls: "scs-current" });
+            cur.createDiv({ cls: "scs-current-label", text: "当前文件" });
+            const name = (_a = d.current.path.split("/").pop()) !== null && _a !== void 0 ? _a : d.current.path;
+            cur.createDiv({ cls: "scs-current-name", text: name });
+            cur.createDiv({
+                cls: "scs-current-num",
+                text: `汉字 ${fmt(d.current.vec.cjk)}　英文词 ${fmt(d.current.vec.lat)}`,
+            });
+        }
+        root.createDiv({
+            cls: "scs-foot",
+            text: `${fmt(d.fileCount)} 个文件　更新于 ${new Date(d.updatedAt).toLocaleTimeString("zh-CN", {
+                hour: "2-digit",
+                minute: "2-digit",
+            })}`,
+        });
+    }
+    metric(parent, label, v) {
+        const box = parent.createDiv({ cls: "scs-metric" });
+        box.createDiv({ cls: "scs-metric-label", text: label });
+        box.createDiv({ cls: "scs-metric-main", text: fmt(v.cjk) });
+        box.createDiv({ cls: "scs-metric-sub", text: `词 ${fmt(v.lat)}` });
+    }
+}
+exports.StatsView = StatsView;
+
+};
+var __entry = __require("main.ts");
+module.exports = __entry && __entry.default ? __entry.default : __entry;

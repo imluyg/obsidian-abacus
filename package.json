@@ -1,0 +1,20 @@
+{
+  "name": "sixcolor-stats",
+  "version": "0.1.0",
+  "description": "Obsidian 字数统计插件：双分量计数 + 追加式账本",
+  "main": "main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "deploy": "node build.mjs && node deploy.mjs",
+    "test": "node build.mjs --test",
+    "check": "tsc -noEmit"
+  },
+  "keywords": ["obsidian", "wordcount", "stats"],
+  "author": "sixcolor",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.6.3"
+  }
+}

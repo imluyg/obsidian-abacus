@@ -1,0 +1,222 @@
+import type { LedgerEntry, StatsSettings, Vec } from "./types";
+import { addVec, isZeroVec, vec } from "./types";
+import { dayKey, monthKey } from "./store";
+
+/** 只把这些来源算作“写” */
+const WRITE_SRC = new Set(["edit", "scan"]);
+
+export interface Sum {
+  add: Vec;
+  del: Vec;
+  /** 参与了统计的事件条数 */
+  n: number;
+}
+
+export function emptySum(): Sum {
+  return { add: vec(0, 0), del: vec(0, 0), n: 0 };
+}
+
+export function addToSum(sum: Sum, e: LedgerEntry): Sum {
+  return {
+    add: addVec(sum.add, vec(e.add[0], e.add[1])),
+    del: addVec(sum.del, vec(e.del[0], e.del[1])),
+    n: sum.n + 1,
+  };
+}
+
+/** 汇总 [from, to) 区间内、且来源属于“写作”的事件 */
+export function sumWriting(entries: LedgerEntry[], from: number, to: number): Sum {
+  let s = emptySum();
+  for (const e of entries) {
+    if (e.t < from || e.t >= to) continue;
+    if (!WRITE_SRC.has(e.src)) continue;
+    s = addToSum(s, e);
+  }
+  return s;
+}
+
+export function sumDeletions(entries: LedgerEntry[], from: number, to: number): Sum {
+  let s = emptySum();
+  for (const e of entries) {
+    if (e.t < from || e.t >= to) continue;
+    if (e.src !== "delete") continue;
+    s = addToSum(s, e);
+  }
+  return s;
+}
+
+/** 按天汇总写作量，用于柱状图 */
+export function byDay(entries: LedgerEntry[]): Map<string, Vec> {
+  const out = new Map<string, Vec>();
+  for (const e of entries) {
+    if (!WRITE_SRC.has(e.src)) continue;
+    const k = dayKey(e.t);
+    const cur = out.get(k) ?? vec(0, 0);
+    out.set(k, addVec(cur, vec(e.add[0], e.add[1])));
+  }
+  return out;
+}
+
+/** 某个月里“有写字”的日期集合 */
+export function daysWithWriting(entries: LedgerEntry[]): Set<string> {
+  const out = new Set<string>();
+  for (const e of entries) {
+    if (!WRITE_SRC.has(e.src)) continue;
+    if (isZeroVec(vec(e.add[0], e.add[1]))) continue;
+    out.add(dayKey(e.t));
+  }
+  return out;
+}
+
+/**
+ * 连续写作天数。今天还没写不算断（从昨天往回数），
+ * 断一天就停——这是“连续”的唯一诚实定义。
+ */
+export function streakFrom(days: Set<string>, today = Date.now()): number {
+  let n = 0;
+  const base = startOfDay(today);
+  for (let i = 0; i < 3650; i++) {
+    const key = dayKey(addDays(base, -i));
+    if (days.has(key)) {
+      n++;
+    } else if (i === 0) {
+      continue; // 今天还没写，不断
+    } else {
+      break;
+    }
+  }
+  return n;
+}
+
+/*
+ * 项目分组。
+ *
+ * 默认按路径前两段分（创作/小说、归档/日记……），
+ * 需要更细的粒度时用规则覆盖，例如：
+ *   小说1 = 创作/小说/1
+ * 规则按前缀最长匹配优先。
+ */
+
+export interface ProjectRule {
+  name: string;
+  prefix: string;
+}
+
+export function parseProjectRules(lines: string[]): ProjectRule[] {
+  const out: ProjectRule[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq === -1) {
+      const prefix = normalizePrefix(line);
+      if (!prefix) continue;
+      out.push({ name: prefix.split("/").pop() ?? prefix, prefix });
+    } else {
+      const name = line.slice(0, eq).trim();
+      const prefix = normalizePrefix(line.slice(eq + 1));
+      if (!name || !prefix) continue;
+      out.push({ name, prefix });
+    }
+  }
+  return out.sort((a, b) => b.prefix.length - a.prefix.length);
+}
+
+function normalizePrefix(s: string): string {
+  return s
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\\/g, "/");
+}
+
+/** 文件属于哪个项目 */
+export function projectOf(path: string, rules: ProjectRule[], depth = 2): string {
+  for (const r of rules) {
+    if (path === r.prefix || path.startsWith(r.prefix + "/")) return r.name;
+  }
+  const parts = path.split("/");
+  if (parts.length <= 1) return "（根目录）";
+  return parts.slice(0, Math.min(depth, parts.length - 1)).join("/");
+}
+
+/**
+ * 一条路径是否不参与统计。
+ * 除了用户配置的排除目录，报告目录也必须排除——
+ * 否则生成的周报会在下一次统计里被当成“今天写的字”，形成自反馈。
+ */
+export function isExcludedPath(path: string, settings: StatsSettings): boolean {
+  const prefixes = [...(settings.excludeFolders ?? [])];
+  if (settings.reportFolder) prefixes.push(settings.reportFolder);
+  for (const raw of prefixes) {
+    const f = normalizePrefix(raw);
+    if (!f) continue;
+    if (path === f || path.startsWith(f + "/")) return true;
+  }
+  return false;
+}
+
+export function startOfDay(ts = Date.now()): number {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export function startOfWeek(ts = Date.now()): number {
+  const d = new Date(startOfDay(ts));
+  const dow = (d.getDay() + 6) % 7; // 周一为一周开始
+  d.setDate(d.getDate() - dow);
+  return d.getTime();
+}
+
+export function startOfMonth(ts = Date.now()): number {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(1);
+  return d.getTime();
+}
+
+export function addDays(ts: number, n: number): number {
+  const d = new Date(ts);
+  d.setDate(d.getDate() + n);
+  return d.getTime();
+}
+
+/** 覆盖 [from, to) 的月份列表，用于决定读哪几个账本文件 */
+export function monthsBetween(from: number, to: number): string[] {
+  const out: string[] = [];
+  const d = new Date(from);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  while (d.getTime() < to) {
+    out.push(monthKey(d.getTime()));
+    d.setMonth(d.getMonth() + 1);
+  }
+  if (out.length === 0) out.push(monthKey(to));
+  return out;
+}
+
+export function isWritingEntry(e: LedgerEntry): boolean {
+  return WRITE_SRC.has(e.src) && !isZeroVec(vec(e.add[0], e.add[1]));
+}
+
+/** ISO 周号：2026-W46 */
+export function isoWeek(ts = Date.now()): string {
+  const d = new Date(ts);
+  const target = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (target.getUTCDay() + 6) % 7;
+  target.setUTCDate(target.getUTCDate() - dayNum + 3);
+  const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  const week = 1 + Math.round((target.getTime() - firstThursday.getTime()) / 604_800_000);
+  return `${target.getUTCFullYear()}-W${`${week}`.padStart(2, "0")}`;
+}
+
+export function fmtDate(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getMonth() + 1}-${`${d.getDate()}`.padStart(2, "0")}`;
+}
+
+export function weekdayCN(ts: number): string {
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][new Date(ts).getDay()];
+}

@@ -1,0 +1,198 @@
+/* SixColor Stats — 侧栏面板与状态栏 */
+
+.scs-statusbar {
+  cursor: pointer;
+}
+
+.scs-panel {
+  padding: 12px 14px 18px;
+  font-size: var(--font-ui-small);
+}
+
+.scs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.scs-title {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+}
+
+.scs-icon-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.scs-icon-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.scs-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.scs-hero-num {
+  font-size: 2.4em;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+.scs-hero-unit {
+  color: var(--text-muted);
+}
+
+.scs-hero-sub {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.scs-del {
+  color: var(--text-faint);
+}
+
+.scs-chart-wrap {
+  margin: 14px 0 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 4px;
+}
+
+.scs-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 64px;
+}
+
+.scs-bar-col {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+  position: relative;
+}
+
+.scs-bar-track {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+}
+
+.scs-bar {
+  width: 100%;
+  background: var(--interactive-accent);
+  opacity: 0.45;
+  border-radius: 2px 2px 0 0;
+  transition: height 160ms ease-out;
+}
+
+.scs-bar-col:hover .scs-bar {
+  opacity: 0.85;
+}
+
+.scs-bar-col.is-today .scs-bar {
+  opacity: 1;
+}
+
+.scs-bar-label {
+  text-align: center;
+  font-size: 0.7em;
+  color: var(--text-faint);
+  line-height: 1.4;
+}
+
+.scs-bar-col.is-today .scs-bar-label {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.scs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.scs-metric {
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.scs-metric-label {
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.scs-metric-main {
+  font-size: 1.15em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.scs-metric-sub {
+  color: var(--text-faint);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.scs-current {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.scs-current-label {
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+
+.scs-current-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scs-current-num {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.scs-foot {
+  margin-top: 14px;
+  color: var(--text-faint);
+  font-size: 0.8em;
+}
+
+.scs-progress {
+  margin: 6px 0;
+  color: var(--text-muted);
+}
+
+.scs-empty {
+  color: var(--text-faint);
+  padding: 12px 0;
+}
+
+.scs-textarea {
+  width: 100%;
+  min-width: 260px;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}

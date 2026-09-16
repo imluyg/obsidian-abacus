@@ -2,6 +2,8 @@ import { App, PluginSettingTab, Setting } from "obsidian";
 import type SixColorStats from "./main";
 import type { StatsSettings } from "./types";
 
+export type SettingsDirtyKind = "counter" | "scan" | "display";
+
 export class StatsSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: SixColorStats) {
     super(app, plugin);
@@ -12,10 +14,12 @@ export class StatsSettingTab extends PluginSettingTab {
     containerEl.empty();
     const s = this.plugin.settings;
 
+    /* ------------------------------ 口径 ------------------------------ */
+
     containerEl.createEl("h3", { text: "统计口径" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "改动这里会让插件重建快照（不产生写作记录），历史账本不受影响。",
+      text: "改动这里会重建快照（不产生写作记录），已记录的账本不受影响。",
     });
 
     new Setting(containerEl)
@@ -54,11 +58,13 @@ export class StatsSettingTab extends PluginSettingTab {
         });
       });
 
+    /* ------------------------------ 显示 ------------------------------ */
+
     containerEl.createEl("h3", { text: "显示" });
 
     new Setting(containerEl)
       .setName("主指标包含英文词")
-      .setDesc("关闭时状态栏与排序只看汉字；两个分量在面板里始终分开显示。")
+      .setDesc("关闭时状态栏只看汉字；两个分量在面板里始终分开显示。")
       .addToggle((t) =>
         t.setValue(s.includeLatinInPrimary).onChange(async (v) => {
           s.includeLatinInPrimary = v;
@@ -66,33 +72,62 @@ export class StatsSettingTab extends PluginSettingTab {
         })
       );
 
+    /* ------------------------------ 项目 ------------------------------ */
+
+    containerEl.createEl("h3", { text: "项目分组" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "默认按路径前两段分组（创作/小说、归档/日记……）。需要更细的粒度就写规则，每行一条：`名称 = 路径前缀`，或只写路径前缀（名称取末段）。规则按前缀最长优先。",
+    });
+
     new Setting(containerEl)
-      .setName("柱状图天数")
-      .addSlider((sl) =>
-        sl
-          .setLimits(7, 30, 1)
-          .setValue(s.chartDays)
-          .setDynamicTooltip()
+      .setName("分组规则")
+      .addTextArea((t) => {
+        t.setPlaceholder("小说1 = 创作/小说/1\n殷浩天 = 创作/殷浩天");
+        t.setValue(s.projectRules.join("\n"));
+        t.inputEl.rows = 5;
+        t.inputEl.addClass("scs-textarea");
+        t.onChange(async (v) => {
+          s.projectRules = v
+            .split("\n")
+            .map((x) => x.trim())
+            .filter(Boolean);
+          await this.plugin.applySettings(["display"]);
+        });
+      });
+
+    /* ------------------------------ 周报 ------------------------------ */
+
+    containerEl.createEl("h3", { text: "周报" });
+
+    new Setting(containerEl)
+      .setName("周报目录")
+      .setDesc("生成的周报会写到这里。该目录自动排除在统计之外，否则周报会被算成“今天写的字”。")
+      .addText((t) =>
+        t
+          .setPlaceholder("归档/统计归档")
+          .setValue(s.reportFolder)
           .onChange(async (v) => {
-            s.chartDays = v;
-            await this.plugin.applySettings(["display"]);
+            s.reportFolder = v.trim() || "归档/统计归档";
+            await this.plugin.applySettings(["scan"]);
           })
       );
+
+    new Setting(containerEl)
+      .setName("生成本周周报")
+      .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")
+      .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeWeeklyReport()));
+
+    /* ------------------------------ 数据 ------------------------------ */
 
     containerEl.createEl("h3", { text: "数据" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量，ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
+      text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
     });
 
     new Setting(containerEl).setName("立即重建快照").addButton((b) =>
       b.setButtonText("重建").onClick(() => void this.plugin.rebuild())
     );
   }
-}
-
-export type SettingsDirtyKind = "counter" | "scan" | "display";
-
-export function applyToSettings(target: StatsSettings, patch: Partial<StatsSettings>): StatsSettings {
-  return Object.assign({}, target, patch);
 }

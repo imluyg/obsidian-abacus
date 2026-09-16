@@ -196,3 +196,81 @@
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
 }
+
+/* ---- 区间切换 ---- */
+.scs-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scs-range-btn {
+  background: none;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.78em;
+  line-height: 1.4;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.scs-range-btn:hover {
+  color: var(--text-normal);
+}
+
+.scs-range-btn.is-active {
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+.scs-streak {
+  color: var(--text-accent);
+}
+
+/* ---- 项目表 ---- */
+.scs-projects {
+  margin-top: 12px;
+}
+
+.scs-section-title {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  margin-bottom: 4px;
+}
+
+.scs-project-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.scs-project-row.is-head {
+  color: var(--text-faint);
+  font-size: 0.75em;
+  padding-bottom: 0;
+}
+
+.scs-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scs-project-num {
+  text-align: right;
+  min-width: 3.2em;
+}
+
+.scs-project-num.is-dim {
+  color: var(--text-faint);
+}
+
+.scs-bar-col.is-today .scs-bar-label {
+  font-weight: 600;
+}

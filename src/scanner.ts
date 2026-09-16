@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   FileStatInfo,
   LedgerEntry,
   StatsSettings,
@@ -8,6 +8,7 @@ import type {
 import { isZeroVec, subVec, vec } from "./types";
 import { countMarkdown, diffCounts } from "./counter";
 import { StatsStore } from "./store";
+import { isExcludedPath } from "./stats";
 
 /**
  * 扫描器：唯一负责“把文件内容变成账本事件”的地方。
@@ -42,13 +43,7 @@ export class Scanner {
   }
 
   isExcluded(path: string): boolean {
-    const list = this.getSettings().excludeFolders ?? [];
-    for (const raw of list) {
-      const f = raw.trim().replace(/^\/+|\/+$/g, "");
-      if (!f) continue;
-      if (path === f || path.startsWith(f + "/")) return true;
-    }
-    return false;
+    return isExcludedPath(path, this.getSettings());
   }
 
   /* --------------------------- 全量扫描 --------------------------- */
@@ -108,6 +103,11 @@ export class Scanner {
       // 关机期间被删掉的文件：从快照移除，记一次删除
       for (const [path, rec] of this.store.entries()) {
         if (seen.has(path)) continue;
+        // 因为改了排除规则而“消失”的文件，不该记成删除
+        if (this.isExcluded(path)) {
+          this.store.remove(path);
+          continue;
+        }
         entries.push({
           t: Date.now(),
           p: path,

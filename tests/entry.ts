@@ -13,7 +13,16 @@ import { DEFAULT_SETTINGS } from "../src/types";
 import { countMarkdown, diffCounts } from "../src/counter";
 import { StatsStore, parseLedger } from "../src/store";
 import { Scanner } from "../src/scanner";
-import { sumWriting, byDay, startOfDay } from "../src/stats";
+import {
+  byDay,
+  isoWeek,
+  isExcludedPath,
+  parseProjectRules,
+  projectOf,
+  startOfDay,
+  streakFrom,
+  sumWriting,
+} from "../src/stats";
 
 let failures = 0;
 function check(label: string, actual: unknown, expected: unknown): void {
@@ -119,7 +128,7 @@ async function testCounter(): Promise<void> {
 }
 
 async function testLedgerFlow(): Promise<void> {
-  console.log("\n[2] 记账流程");
+  console.log("\n[3] 记账流程");
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-vault-"));
   const data = path.join(root, ".data");
   await fs.promises.mkdir(path.join(root, "笔记"), { recursive: true });
@@ -171,7 +180,7 @@ async function testLedgerFlow(): Promise<void> {
 }
 
 async function testRealVault(vaultRoot: string): Promise<void> {
-  console.log(`\n[3] 真实库扫描：${vaultRoot}`);
+  console.log(`\n[4] 真实库扫描：${vaultRoot}`);
   const dataRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-data-"));
   const settings: StatsSettings = { ...DEFAULT_SETTINGS };
   const store = new StatsStore("", new FsAdapter(dataRoot));
@@ -225,8 +234,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function testStatsHelpers(): Promise<void> {
+  console.log("\n[2] 趋势 / 连续 / 项目");
+  const at = (s: string) => new Date(`${s}T10:00:00`).getTime();
+
+  check("连续 3 天（含今天）", streakFrom(new Set(["2026-11-15", "2026-11-14", "2026-11-13"]), at("2026-11-15")), 3);
+  check("今天还没写不断", streakFrom(new Set(["2026-11-14", "2026-11-13"]), at("2026-11-15")), 2);
+  check("中间断一天就停", streakFrom(new Set(["2026-11-15", "2026-11-13"]), at("2026-11-15")), 1);
+  check("完全没有记录", streakFrom(new Set(), at("2026-11-15")), 0);
+
+  check("默认按前两段分组", projectOf("创作/小说/1/第一章.md", [], 2), "创作/小说");
+  check("顶层文件归根目录", projectOf("随手记.md", [], 2), "（根目录）");
+  const rules = parseProjectRules(["小说1 = 创作/小说/1", "创作/设定集"]);
+  check("规则优先生效", projectOf("创作/小说/1/第一章.md", rules, 2), "小说1");
+  check("裸规则取末段作名称", projectOf("创作/设定集/本命卡牌/第五卷.md", rules, 2), "设定集");
+  check("规则外落回默认", projectOf("归档/日记/2026/11/2026-11-15.md", rules, 2), "归档/日记");
+
+  check("ISO 周号", isoWeek(at("2026-11-15")), "2026-W46");
+  check("ISO 周号·年初", isoWeek(at("2026-01-01")), "2026-W01");
+
+  const s = { ...DEFAULT_SETTINGS, reportFolder: "归档/统计归档" };
+  check("报告目录被排除", isExcludedPath("归档/统计归档/周报 2026-W46.md", s), true);
+  check("普通笔记不排除", isExcludedPath("归档/日记/2026-11-15.md", s), false);
+}
+
 async function main(): Promise<void> {
   await testCounter();
+  await testStatsHelpers();
   await testLedgerFlow();
   const vault = process.argv[2];
   if (vault && fs.existsSync(vault)) await testRealVault(vault);

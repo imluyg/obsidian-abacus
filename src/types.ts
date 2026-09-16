@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 核心思想：只存分量，不存合成值。
  *
  * 一个汉字和一个英文词并不等价，把它们加成 "72.7 万字" 是没有语义的。
@@ -55,8 +55,6 @@ export interface StatsSettings extends CounterSettings {
   includeLatinInPrimary: boolean;
   /** 面板柱状图天数：7 或 30 */
   panelRange: number;
-  /** 旧字段：柱状图天数，保留以兼容已保存的设置 */
-  chartDays: number;
   /** 编辑去抖（毫秒） */
   debounceMs: number;
   /** 项目分组规则，每行 "名称 = 路径前缀" 或 "路径前缀" */
@@ -71,7 +69,6 @@ export const DEFAULT_SETTINGS: StatsSettings = {
   excludeFolders: [".trash"],
   includeLatinInPrimary: false,
   panelRange: 7,
-  chartDays: 14,
   debounceMs: 2500,
   projectRules: [],
   reportFolder: "归档/统计归档",

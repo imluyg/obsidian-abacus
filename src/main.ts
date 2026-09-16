@@ -1,23 +1,35 @@
-import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "./types";
-import { DEFAULT_SETTINGS, vec } from "./types";
+import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
 import { StatsStore, dayKey, monthKey } from "./store";
 import { Scanner } from "./scanner";
-import { StatsView, VIEW_TYPE_STATS, type DayBar, type PanelData } from "./view";
+import { StatsView, VIEW_TYPE_STATS, type DayBar, type PanelData, type ProjectRow } from "./view";
 import { StatsSettingTab, type SettingsDirtyKind } from "./settings";
 import {
   addDays,
   byDay,
+  daysWithWriting,
+  fmtDate,
+  isExcludedPath,
+  isWritingEntry,
+  isoWeek,
   monthsBetween,
+  parseProjectRules,
+  projectOf,
   startOfDay,
   startOfMonth,
   startOfWeek,
+  streakFrom,
   sumDeletions,
   sumWriting,
+  weekdayCN,
 } from "./stats";
+import { buildWeeklyReport, type ReportDaily, type ReportProject, type ReportFile } from "./report";
 
 const WEEK_CHARS = ["日", "一", "二", "三", "四", "五", "六"];
 const LEDGER_TTL = 3000;
+const TOP_PROJECTS = 6;
+const TOP_REPORT_FILES = 10;
 
 export default class SixColorStats extends Plugin {
   settings: StatsSettings = { ...DEFAULT_SETTINGS };
@@ -28,14 +40,14 @@ export default class SixColorStats extends Plugin {
   private ledgerCache = new Map<string, { at: number; entries: LedgerEntry[] }>();
   private refreshTimer: number | null = null;
   private progress: { done: number; total: number } | null = null;
-  private baseDir = "";
+  private streakCache: { at: number; value: number } | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
 
-    this.baseDir = this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`;
+    const baseDir = this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`;
     const adapter = this.app.vault.adapter as unknown as StatsAdapter;
-    this.store = new StatsStore(this.baseDir, adapter, 1);
+    this.store = new StatsStore(baseDir, adapter, 1);
     await this.store.load();
 
     const io: VaultIO = {
@@ -58,13 +70,17 @@ export default class SixColorStats extends Plugin {
         this.progress = { done, total };
         this.scheduleRefresh(120);
       },
-      onChange: () => {
-        this.ledgerCache.clear();
-        this.scheduleRefresh(200);
-      },
+      onChange: () => this.invalidate(),
     });
 
-    this.registerView(VIEW_TYPE_STATS, (leaf: WorkspaceLeaf) => new StatsView(leaf, () => this.rebuild()));
+    this.registerView(
+      VIEW_TYPE_STATS,
+      (leaf: WorkspaceLeaf) =>
+        new StatsView(leaf, {
+          onRescan: () => void this.rebuild(),
+          onRange: (days) => void this.setRange(days),
+        })
+    );
 
     this.statusBar = this.addStatusBarItem();
     this.statusBar.addClass("scs-statusbar");
@@ -74,15 +90,12 @@ export default class SixColorStats extends Plugin {
 
     this.addRibbonIcon("calculator", "字数统计", () => void this.activateView());
 
+    this.addCommand({ id: "open-panel", name: "打开统计面板", callback: () => void this.activateView() });
+    this.addCommand({ id: "rebuild", name: "重建全库快照", callback: () => void this.rebuild() });
     this.addCommand({
-      id: "open-panel",
-      name: "打开统计面板",
-      callback: () => void this.activateView(),
-    });
-    this.addCommand({
-      id: "rebuild",
-      name: "重建全库快照",
-      callback: () => void this.rebuild(),
+      id: "weekly-report",
+      name: "生成本周周报",
+      callback: () => void this.writeWeeklyReport(),
     });
 
     this.addSettingTab(new StatsSettingTab(this.app, this));
@@ -136,10 +149,17 @@ export default class SixColorStats extends Plugin {
     new Notice("正在重建快照…");
     this.store.clear();
     const res = await this.scanner.fullScan(true);
-    this.ledgerCache.clear();
+    this.invalidate();
     this.progress = null;
     await this.refresh();
     new Notice(`快照已重建：${res.files} 个文件。账本未改动。`);
+  }
+
+  async setRange(days: number): Promise<void> {
+    if (this.settings.panelRange === days) return;
+    this.settings.panelRange = days;
+    await this.saveData(this.settings);
+    await this.refresh();
   }
 
   async applySettings(kinds: SettingsDirtyKind[]): Promise<void> {
@@ -152,6 +172,12 @@ export default class SixColorStats extends Plugin {
   }
 
   /* ------------------------------ 数据流 ------------------------------ */
+
+  private invalidate(): void {
+    this.ledgerCache.clear();
+    this.streakCache = null;
+    this.scheduleRefresh(200);
+  }
 
   private scheduleRefresh(delay = 250): void {
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
@@ -173,34 +199,36 @@ export default class SixColorStats extends Plugin {
     if (!this.statusBar) return;
     const today = data.todayAdd.cjk + data.todayAdd.lat;
     this.statusBar.setText(
-      today === 0 ? "今日 +0" : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`
+      today === 0
+        ? "今日 +0"
+        : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`
     );
     this.statusBar.title =
       `本周 汉字 ${data.weekAdd.cjk.toLocaleString("en-US")} / 词 ${data.weekAdd.lat.toLocaleString("en-US")}\n` +
+      (data.streak > 0 ? `连续 ${data.streak} 天\n` : "") +
       `全库 汉字 ${data.total.cjk.toLocaleString("en-US")} / 词 ${data.total.lat.toLocaleString("en-US")}\n` +
       `点击打开面板`;
   }
 
   private async buildPanelData(): Promise<PanelData> {
     const now = Date.now();
-    const chartDays = Math.max(1, this.settings.chartDays);
-    const chartFrom = addDays(startOfDay(now), -(chartDays - 1));
+    const range = this.settings.panelRange === 30 ? 30 : 7;
+    const chartFrom = addDays(startOfDay(now), -(range - 1));
     const from = Math.min(startOfMonth(now), startOfWeek(now), chartFrom);
     const entries = await this.readMonths(monthsBetween(from, now + 1));
 
-    const todayAdd = sumWriting(entries, startOfDay(now), now + 1).add;
-    const editDel = sumWriting(entries, startOfDay(now), now + 1).del;
+    const todaySum = sumWriting(entries, startOfDay(now), now + 1);
     const fileDel = sumDeletions(entries, startOfDay(now), now + 1).del;
-    const todayDel = vec(editDel.cjk + fileDel.cjk, editDel.lat + fileDel.lat);
+    const todayDel = vec(todaySum.del.cjk + fileDel.cjk, todaySum.del.lat + fileDel.lat);
 
     const perDay = byDay(entries);
     const days: DayBar[] = [];
-    for (let i = 0; i < chartDays; i++) {
+    for (let i = 0; i < range; i++) {
       const ts = addDays(chartFrom, i);
       const key = dayKey(ts);
       days.push({
         day: key,
-        label: WEEK_CHARS[new Date(ts).getDay()],
+        label: range > 7 ? `${new Date(ts).getDate()}` : WEEK_CHARS[new Date(ts).getDay()],
         vec: perDay.get(key) ?? vec(0, 0),
         isToday: key === dayKey(now),
       });
@@ -210,7 +238,7 @@ export default class SixColorStats extends Plugin {
     const rec = active ? this.store.get(active.path) : undefined;
 
     return {
-      todayAdd,
+      todayAdd: todaySum.add,
       todayDel,
       weekAdd: sumWriting(entries, startOfWeek(now), now + 1).add,
       monthAdd: sumWriting(entries, startOfMonth(now), now + 1).add,
@@ -218,26 +246,170 @@ export default class SixColorStats extends Plugin {
       fileCount: this.store.size(),
       current: active && rec ? { path: active.path, vec: rec.vec } : undefined,
       days,
+      range,
+      streak: await this.computeStreak(),
+      projects: this.buildProjects(entries, now),
       scanning: this.scanner?.isScanning ?? false,
       progress: this.progress ?? undefined,
       updatedAt: now,
     };
   }
 
+  /** 项目：本月新增 + 全库存量，按本月新增排序 */
+  private buildProjects(entries: LedgerEntry[], now: number): ProjectRow[] {
+    const rules = parseProjectRules(this.settings.projectRules);
+    const monthFrom = startOfMonth(now);
+
+    const stock = new Map<string, Vec>();
+    for (const [path, r] of this.store.entries()) {
+      const name = projectOf(path, rules);
+      stock.set(name, addVec(stock.get(name) ?? vec(0, 0), r.vec));
+    }
+
+    const flow = new Map<string, Vec>();
+    for (const e of entries) {
+      if (e.t < monthFrom || e.t > now) continue;
+      if (!isWritingEntry(e)) continue;
+      const name = projectOf(e.p, rules);
+      flow.set(name, addVec(flow.get(name) ?? vec(0, 0), vec(e.add[0], e.add[1])));
+    }
+
+    const rows: ProjectRow[] = [];
+    for (const [name, total] of stock) {
+      rows.push({ name, month: flow.get(name) ?? vec(0, 0), total });
+    }
+    for (const [name, month] of flow) {
+      if (!stock.has(name)) rows.push({ name, month, total: vec(0, 0) });
+    }
+
+    return rows
+      .filter((r) => !isZeroVec(r.total) || !isZeroVec(r.month))
+      .sort((a, b) => b.month.cjk - a.month.cjk || b.total.cjk - a.total.cjk)
+      .slice(0, TOP_PROJECTS);
+  }
+
+  /**
+   * 连续写作天数：从今天往回逐日查，遇到空白天就停。
+   * 只加载真正走过的那几个月，不会为了一个数字把几年账本读一遍。
+   */
+  private async computeStreak(): Promise<number> {
+    const now = Date.now();
+    if (this.streakCache && now - this.streakCache.at < LEDGER_TTL) return this.streakCache.value;
+
+    const today = startOfDay(now);
+    const days = new Set<string>();
+    const monthSets = new Map<string, Set<string>>();
+
+    for (let i = 0; i < 400; i++) {
+      const ts = addDays(today, -i);
+      const ym = monthKey(ts);
+      let set = monthSets.get(ym);
+      if (!set) {
+        set = daysWithWriting(await this.readMonthCached(ym));
+        monthSets.set(ym, set);
+      }
+      const key = dayKey(ts);
+      if (set.has(key)) {
+        days.add(key);
+      } else if (i > 0) {
+        break; // 今天还没写不算断，昨天没写才算
+      }
+    }
+
+    const value = streakFrom(days, today);
+    this.streakCache = { at: now, value };
+    return value;
+  }
+
+  private async readMonthCached(ym: string): Promise<LedgerEntry[]> {
+    const now = Date.now();
+    const hit = this.ledgerCache.get(ym);
+    if (hit && now - hit.at < LEDGER_TTL) return hit.entries;
+    const entries = await this.store.readMonth(ym);
+    this.ledgerCache.set(ym, { at: now, entries });
+    return entries;
+  }
+
   private async readMonths(yms: string[]): Promise<LedgerEntry[]> {
     const out: LedgerEntry[] = [];
-    const now = Date.now();
-    for (const ym of yms) {
-      const hit = this.ledgerCache.get(ym);
-      if (hit && now - hit.at < LEDGER_TTL) {
-        out.push(...hit.entries);
-        continue;
-      }
-      const entries = await this.store.readMonth(ym);
-      this.ledgerCache.set(ym, { at: now, entries });
-      out.push(...entries);
-    }
+    for (const ym of yms) out.push(...(await this.readMonthCached(ym)));
     return out;
+  }
+
+  /* ------------------------------ 周报 ------------------------------ */
+
+  async writeWeeklyReport(): Promise<void> {
+    const now = Date.now();
+    const weekStart = startOfWeek(now);
+    const weekEnd = addDays(weekStart, 7);
+    const entries = await this.readMonths(monthsBetween(weekStart, weekEnd));
+    const rules = parseProjectRules(this.settings.projectRules);
+
+    const dailyVec = byDay(entries);
+    const daily: ReportDaily[] = [];
+    let activeDays = 0;
+    for (let i = 0; i < 7; i++) {
+      const ts = addDays(weekStart, i);
+      const key = dayKey(ts);
+      const v = dailyVec.get(key) ?? vec(0, 0);
+      if (v.cjk + v.lat > 0) activeDays++;
+      daily.push({ date: key, weekday: weekdayCN(ts), vec: v });
+    }
+
+    const weekSum = sumWriting(entries, weekStart, weekEnd);
+    const weekDel = sumDeletions(entries, weekStart, weekEnd).del;
+
+    const projMap = new Map<string, Vec>();
+    const fileMap = new Map<string, Vec>();
+    for (const e of entries) {
+      if (e.t < weekStart || e.t >= weekEnd || !isWritingEntry(e)) continue;
+      const v = vec(e.add[0], e.add[1]);
+      const p = projectOf(e.p, rules);
+      projMap.set(p, addVec(projMap.get(p) ?? vec(0, 0), v));
+      fileMap.set(e.p, addVec(fileMap.get(e.p) ?? vec(0, 0), v));
+    }
+
+    const projects: ReportProject[] = [...projMap.entries()]
+      .map(([name, v]) => ({ name, vec: v }))
+      .sort((a, b) => b.vec.cjk - a.vec.cjk);
+
+    const topFiles: ReportFile[] = [...fileMap.entries()]
+      .map(([path, v]) => ({ path, vec: v }))
+      .sort((a, b) => b.vec.cjk - a.vec.cjk)
+      .slice(0, TOP_REPORT_FILES);
+
+    const content = buildWeeklyReport({
+      week: isoWeek(now),
+      weekStartLabel: `${new Date(weekStart).getMonth() + 1}月${new Date(weekStart).getDate()}日`,
+      weekEndLabel: `${new Date(weekEnd - 86400000).getMonth() + 1}月${new Date(weekEnd - 86400000).getDate()}日`,
+      add: weekSum.add,
+      del: weekDel,
+      activeDays,
+      streak: await this.computeStreak(),
+      total: this.store.total(),
+      fileCount: this.store.size(),
+      daily,
+      projects,
+      topFiles,
+      generatedAt: now,
+    });
+
+    const folder = normalizePath(this.settings.reportFolder || "归档/统计归档");
+    const filePath = normalizePath(`${folder}/周报 ${isoWeek(now)}.md`);
+    try {
+      if (!this.app.vault.getAbstractFileByPath(folder)) {
+        await this.app.vault.createFolder(folder);
+      }
+      const existing = this.app.vault.getAbstractFileByPath(filePath);
+      if (existing instanceof TFile) {
+        await this.app.vault.modify(existing, content);
+      } else {
+        await this.app.vault.create(filePath, content);
+      }
+      new Notice(`周报已写入 ${filePath}`);
+    } catch (err) {
+      new Notice(`写周报失败：${(err as Error).message}`);
+    }
   }
 
   /* ------------------------------ 界面 ------------------------------ */
@@ -269,12 +441,20 @@ export default class SixColorStats extends Plugin {
     if (!Array.isArray(this.settings.excludeFolders)) {
       this.settings.excludeFolders = [...DEFAULT_SETTINGS.excludeFolders];
     }
+    if (!Array.isArray(this.settings.projectRules)) {
+      this.settings.projectRules = [];
+    }
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
   }
+
+  /** 周报目录与排除规则共用一套判断，供 Scanner 调用 */
+  isExcluded(path: string): boolean {
+    return isExcludedPath(path, this.settings);
+  }
 }
 
 export type { Vec };
-export { monthKey };
+export { monthKey, fmtDate };

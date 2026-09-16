@@ -106,7 +106,7 @@ function diffCounts(prev, next, opts) {
 __modules["main.ts"] = function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.monthKey = void 0;
+exports.fmtDate = exports.monthKey = void 0;
 const obsidian_1 = require("obsidian");
 const types_1 = require("./types");
 const store_1 = require("./store");
@@ -115,8 +115,12 @@ const scanner_1 = require("./scanner");
 const view_1 = require("./view");
 const settings_1 = require("./settings");
 const stats_1 = require("./stats");
+Object.defineProperty(exports, "fmtDate", { enumerable: true, get: function () { return stats_1.fmtDate; } });
+const report_1 = require("./report");
 const WEEK_CHARS = ["日", "一", "二", "三", "四", "五", "六"];
 const LEDGER_TTL = 3000;
+const TOP_PROJECTS = 6;
+const TOP_REPORT_FILES = 10;
 class SixColorStats extends obsidian_1.Plugin {
     constructor() {
         super(...arguments);
@@ -124,14 +128,14 @@ class SixColorStats extends obsidian_1.Plugin {
         this.ledgerCache = new Map();
         this.refreshTimer = null;
         this.progress = null;
-        this.baseDir = "";
+        this.streakCache = null;
     }
     async onload() {
         var _a;
         await this.loadSettings();
-        this.baseDir = (_a = this.manifest.dir) !== null && _a !== void 0 ? _a : `.obsidian/plugins/${this.manifest.id}`;
+        const baseDir = (_a = this.manifest.dir) !== null && _a !== void 0 ? _a : `.obsidian/plugins/${this.manifest.id}`;
         const adapter = this.app.vault.adapter;
-        this.store = new store_1.StatsStore(this.baseDir, adapter, 1);
+        this.store = new store_1.StatsStore(baseDir, adapter, 1);
         await this.store.load();
         const io = {
             listFiles: () => this.app.vault.getMarkdownFiles().map((f) => ({
@@ -152,27 +156,24 @@ class SixColorStats extends obsidian_1.Plugin {
                 this.progress = { done, total };
                 this.scheduleRefresh(120);
             },
-            onChange: () => {
-                this.ledgerCache.clear();
-                this.scheduleRefresh(200);
-            },
+            onChange: () => this.invalidate(),
         });
-        this.registerView(view_1.VIEW_TYPE_STATS, (leaf) => new view_1.StatsView(leaf, () => this.rebuild()));
+        this.registerView(view_1.VIEW_TYPE_STATS, (leaf) => new view_1.StatsView(leaf, {
+            onRescan: () => void this.rebuild(),
+            onRange: (days) => void this.setRange(days),
+        }));
         this.statusBar = this.addStatusBarItem();
         this.statusBar.addClass("scs-statusbar");
         this.statusBar.setText("统计中…");
         this.statusBar.onclick = () => void this.activateView();
         this.statusBar.title = "点击打开字数统计面板";
         this.addRibbonIcon("calculator", "字数统计", () => void this.activateView());
+        this.addCommand({ id: "open-panel", name: "打开统计面板", callback: () => void this.activateView() });
+        this.addCommand({ id: "rebuild", name: "重建全库快照", callback: () => void this.rebuild() });
         this.addCommand({
-            id: "open-panel",
-            name: "打开统计面板",
-            callback: () => void this.activateView(),
-        });
-        this.addCommand({
-            id: "rebuild",
-            name: "重建全库快照",
-            callback: () => void this.rebuild(),
+            id: "weekly-report",
+            name: "生成本周周报",
+            callback: () => void this.writeWeeklyReport(),
         });
         this.addSettingTab(new settings_1.StatsSettingTab(this.app, this));
         this.registerEvent(this.app.vault.on("modify", (f) => {
@@ -215,10 +216,17 @@ class SixColorStats extends obsidian_1.Plugin {
         new obsidian_1.Notice("正在重建快照…");
         this.store.clear();
         const res = await this.scanner.fullScan(true);
-        this.ledgerCache.clear();
+        this.invalidate();
         this.progress = null;
         await this.refresh();
         new obsidian_1.Notice(`快照已重建：${res.files} 个文件。账本未改动。`);
+    }
+    async setRange(days) {
+        if (this.settings.panelRange === days)
+            return;
+        this.settings.panelRange = days;
+        await this.saveData(this.settings);
+        await this.refresh();
     }
     async applySettings(kinds) {
         await this.saveData(this.settings);
@@ -228,6 +236,11 @@ class SixColorStats extends obsidian_1.Plugin {
         else {
             await this.refresh();
         }
+    }
+    invalidate() {
+        this.ledgerCache.clear();
+        this.streakCache = null;
+        this.scheduleRefresh(200);
     }
     scheduleRefresh(delay = 250) {
         if (this.refreshTimer !== null)
@@ -250,31 +263,33 @@ class SixColorStats extends obsidian_1.Plugin {
         if (!this.statusBar)
             return;
         const today = data.todayAdd.cjk + data.todayAdd.lat;
-        this.statusBar.setText(today === 0 ? "今日 +0" : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`);
+        this.statusBar.setText(today === 0
+            ? "今日 +0"
+            : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`);
         this.statusBar.title =
             `本周 汉字 ${data.weekAdd.cjk.toLocaleString("en-US")} / 词 ${data.weekAdd.lat.toLocaleString("en-US")}\n` +
+                (data.streak > 0 ? `连续 ${data.streak} 天\n` : "") +
                 `全库 汉字 ${data.total.cjk.toLocaleString("en-US")} / 词 ${data.total.lat.toLocaleString("en-US")}\n` +
                 `点击打开面板`;
     }
     async buildPanelData() {
         var _a, _b, _c, _d;
         const now = Date.now();
-        const chartDays = Math.max(1, this.settings.chartDays);
-        const chartFrom = (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(chartDays - 1));
+        const range = this.settings.panelRange === 30 ? 30 : 7;
+        const chartFrom = (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(range - 1));
         const from = Math.min((0, stats_1.startOfMonth)(now), (0, stats_1.startOfWeek)(now), chartFrom);
         const entries = await this.readMonths((0, stats_1.monthsBetween)(from, now + 1));
-        const todayAdd = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1).add;
-        const editDel = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1).del;
+        const todaySum = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1);
         const fileDel = (0, stats_1.sumDeletions)(entries, (0, stats_1.startOfDay)(now), now + 1).del;
-        const todayDel = (0, types_1.vec)(editDel.cjk + fileDel.cjk, editDel.lat + fileDel.lat);
+        const todayDel = (0, types_1.vec)(todaySum.del.cjk + fileDel.cjk, todaySum.del.lat + fileDel.lat);
         const perDay = (0, stats_1.byDay)(entries);
         const days = [];
-        for (let i = 0; i < chartDays; i++) {
+        for (let i = 0; i < range; i++) {
             const ts = (0, stats_1.addDays)(chartFrom, i);
             const key = (0, store_1.dayKey)(ts);
             days.push({
                 day: key,
-                label: WEEK_CHARS[new Date(ts).getDay()],
+                label: range > 7 ? `${new Date(ts).getDate()}` : WEEK_CHARS[new Date(ts).getDay()],
                 vec: (_a = perDay.get(key)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0),
                 isToday: key === (0, store_1.dayKey)(now),
             });
@@ -282,7 +297,7 @@ class SixColorStats extends obsidian_1.Plugin {
         const active = this.app.workspace.getActiveFile();
         const rec = active ? this.store.get(active.path) : undefined;
         return {
-            todayAdd,
+            todayAdd: todaySum.add,
             todayDel,
             weekAdd: (0, stats_1.sumWriting)(entries, (0, stats_1.startOfWeek)(now), now + 1).add,
             monthAdd: (0, stats_1.sumWriting)(entries, (0, stats_1.startOfMonth)(now), now + 1).add,
@@ -290,25 +305,157 @@ class SixColorStats extends obsidian_1.Plugin {
             fileCount: this.store.size(),
             current: active && rec ? { path: active.path, vec: rec.vec } : undefined,
             days,
+            range,
+            streak: await this.computeStreak(),
+            projects: this.buildProjects(entries, now),
             scanning: (_c = (_b = this.scanner) === null || _b === void 0 ? void 0 : _b.isScanning) !== null && _c !== void 0 ? _c : false,
             progress: (_d = this.progress) !== null && _d !== void 0 ? _d : undefined,
             updatedAt: now,
         };
     }
+    buildProjects(entries, now) {
+        var _a, _b, _c;
+        const rules = (0, stats_1.parseProjectRules)(this.settings.projectRules);
+        const monthFrom = (0, stats_1.startOfMonth)(now);
+        const stock = new Map();
+        for (const [path, r] of this.store.entries()) {
+            const name = (0, stats_1.projectOf)(path, rules);
+            stock.set(name, (0, types_1.addVec)((_a = stock.get(name)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0), r.vec));
+        }
+        const flow = new Map();
+        for (const e of entries) {
+            if (e.t < monthFrom || e.t > now)
+                continue;
+            if (!(0, stats_1.isWritingEntry)(e))
+                continue;
+            const name = (0, stats_1.projectOf)(e.p, rules);
+            flow.set(name, (0, types_1.addVec)((_b = flow.get(name)) !== null && _b !== void 0 ? _b : (0, types_1.vec)(0, 0), (0, types_1.vec)(e.add[0], e.add[1])));
+        }
+        const rows = [];
+        for (const [name, total] of stock) {
+            rows.push({ name, month: (_c = flow.get(name)) !== null && _c !== void 0 ? _c : (0, types_1.vec)(0, 0), total });
+        }
+        for (const [name, month] of flow) {
+            if (!stock.has(name))
+                rows.push({ name, month, total: (0, types_1.vec)(0, 0) });
+        }
+        return rows
+            .filter((r) => !(0, types_1.isZeroVec)(r.total) || !(0, types_1.isZeroVec)(r.month))
+            .sort((a, b) => b.month.cjk - a.month.cjk || b.total.cjk - a.total.cjk)
+            .slice(0, TOP_PROJECTS);
+    }
+    async computeStreak() {
+        const now = Date.now();
+        if (this.streakCache && now - this.streakCache.at < LEDGER_TTL)
+            return this.streakCache.value;
+        const today = (0, stats_1.startOfDay)(now);
+        const days = new Set();
+        const monthSets = new Map();
+        for (let i = 0; i < 400; i++) {
+            const ts = (0, stats_1.addDays)(today, -i);
+            const ym = (0, store_1.monthKey)(ts);
+            let set = monthSets.get(ym);
+            if (!set) {
+                set = (0, stats_1.daysWithWriting)(await this.readMonthCached(ym));
+                monthSets.set(ym, set);
+            }
+            const key = (0, store_1.dayKey)(ts);
+            if (set.has(key)) {
+                days.add(key);
+            }
+            else if (i > 0) {
+                break;
+            }
+        }
+        const value = (0, stats_1.streakFrom)(days, today);
+        this.streakCache = { at: now, value };
+        return value;
+    }
+    async readMonthCached(ym) {
+        const now = Date.now();
+        const hit = this.ledgerCache.get(ym);
+        if (hit && now - hit.at < LEDGER_TTL)
+            return hit.entries;
+        const entries = await this.store.readMonth(ym);
+        this.ledgerCache.set(ym, { at: now, entries });
+        return entries;
+    }
     async readMonths(yms) {
         const out = [];
-        const now = Date.now();
-        for (const ym of yms) {
-            const hit = this.ledgerCache.get(ym);
-            if (hit && now - hit.at < LEDGER_TTL) {
-                out.push(...hit.entries);
-                continue;
-            }
-            const entries = await this.store.readMonth(ym);
-            this.ledgerCache.set(ym, { at: now, entries });
-            out.push(...entries);
-        }
+        for (const ym of yms)
+            out.push(...(await this.readMonthCached(ym)));
         return out;
+    }
+    async writeWeeklyReport() {
+        var _a, _b, _c;
+        const now = Date.now();
+        const weekStart = (0, stats_1.startOfWeek)(now);
+        const weekEnd = (0, stats_1.addDays)(weekStart, 7);
+        const entries = await this.readMonths((0, stats_1.monthsBetween)(weekStart, weekEnd));
+        const rules = (0, stats_1.parseProjectRules)(this.settings.projectRules);
+        const dailyVec = (0, stats_1.byDay)(entries);
+        const daily = [];
+        let activeDays = 0;
+        for (let i = 0; i < 7; i++) {
+            const ts = (0, stats_1.addDays)(weekStart, i);
+            const key = (0, store_1.dayKey)(ts);
+            const v = (_a = dailyVec.get(key)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0);
+            if (v.cjk + v.lat > 0)
+                activeDays++;
+            daily.push({ date: key, weekday: (0, stats_1.weekdayCN)(ts), vec: v });
+        }
+        const weekSum = (0, stats_1.sumWriting)(entries, weekStart, weekEnd);
+        const weekDel = (0, stats_1.sumDeletions)(entries, weekStart, weekEnd).del;
+        const projMap = new Map();
+        const fileMap = new Map();
+        for (const e of entries) {
+            if (e.t < weekStart || e.t >= weekEnd || !(0, stats_1.isWritingEntry)(e))
+                continue;
+            const v = (0, types_1.vec)(e.add[0], e.add[1]);
+            const p = (0, stats_1.projectOf)(e.p, rules);
+            projMap.set(p, (0, types_1.addVec)((_b = projMap.get(p)) !== null && _b !== void 0 ? _b : (0, types_1.vec)(0, 0), v));
+            fileMap.set(e.p, (0, types_1.addVec)((_c = fileMap.get(e.p)) !== null && _c !== void 0 ? _c : (0, types_1.vec)(0, 0), v));
+        }
+        const projects = [...projMap.entries()]
+            .map(([name, v]) => ({ name, vec: v }))
+            .sort((a, b) => b.vec.cjk - a.vec.cjk);
+        const topFiles = [...fileMap.entries()]
+            .map(([path, v]) => ({ path, vec: v }))
+            .sort((a, b) => b.vec.cjk - a.vec.cjk)
+            .slice(0, TOP_REPORT_FILES);
+        const content = (0, report_1.buildWeeklyReport)({
+            week: (0, stats_1.isoWeek)(now),
+            weekStartLabel: `${new Date(weekStart).getMonth() + 1}月${new Date(weekStart).getDate()}日`,
+            weekEndLabel: `${new Date(weekEnd - 86400000).getMonth() + 1}月${new Date(weekEnd - 86400000).getDate()}日`,
+            add: weekSum.add,
+            del: weekDel,
+            activeDays,
+            streak: await this.computeStreak(),
+            total: this.store.total(),
+            fileCount: this.store.size(),
+            daily,
+            projects,
+            topFiles,
+            generatedAt: now,
+        });
+        const folder = (0, obsidian_1.normalizePath)(this.settings.reportFolder || "归档/统计归档");
+        const filePath = (0, obsidian_1.normalizePath)(`${folder}/周报 ${(0, stats_1.isoWeek)(now)}.md`);
+        try {
+            if (!this.app.vault.getAbstractFileByPath(folder)) {
+                await this.app.vault.createFolder(folder);
+            }
+            const existing = this.app.vault.getAbstractFileByPath(filePath);
+            if (existing instanceof obsidian_1.TFile) {
+                await this.app.vault.modify(existing, content);
+            }
+            else {
+                await this.app.vault.create(filePath, content);
+            }
+            new obsidian_1.Notice(`周报已写入 ${filePath}`);
+        }
+        catch (err) {
+            new obsidian_1.Notice(`写周报失败：${err.message}`);
+        }
     }
     async activateView() {
         const { workspace } = this.app;
@@ -335,12 +482,88 @@ class SixColorStats extends obsidian_1.Plugin {
         if (!Array.isArray(this.settings.excludeFolders)) {
             this.settings.excludeFolders = [...types_1.DEFAULT_SETTINGS.excludeFolders];
         }
+        if (!Array.isArray(this.settings.projectRules)) {
+            this.settings.projectRules = [];
+        }
     }
     async saveSettings() {
         await this.saveData(this.settings);
     }
+    isExcluded(path) {
+        return (0, stats_1.isExcludedPath)(path, this.settings);
+    }
 }
 exports.default = SixColorStats;
+
+};
+__modules["report.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildWeeklyReport = buildWeeklyReport;
+const n = (v) => Math.round(v).toLocaleString("en-US");
+function buildWeeklyReport(i) {
+    const lines = [];
+    lines.push("---");
+    lines.push("tags:");
+    lines.push("  - 统计");
+    lines.push("  - 周报");
+    lines.push(`week: ${i.week}`);
+    lines.push("---");
+    lines.push("");
+    lines.push(`# 周报 ${i.week}`);
+    lines.push("");
+    lines.push(`${i.weekStartLabel} ~ ${i.weekEndLabel} · 由 SixColor Stats 生成于 ${new Date(i.generatedAt).toLocaleString("zh-CN")}`);
+    lines.push("");
+    lines.push("## 总览");
+    lines.push("");
+    lines.push("| 指标 | 汉字 | 英文词 |");
+    lines.push("| --- | ---: | ---: |");
+    lines.push(`| 本周新增 | ${n(i.add.cjk)} | ${n(i.add.lat)} |`);
+    lines.push(`| 本周删改 | −${n(i.del.cjk)} | −${n(i.del.lat)} |`);
+    lines.push(`| 净增长 | ${n(i.add.cjk - i.del.cjk)} | ${n(i.add.lat - i.del.lat)} |`);
+    lines.push(`| 活跃天数 | ${i.activeDays} / ${i.daily.length} | |`);
+    lines.push(`| 连续写作 | ${i.streak} 天 | |`);
+    lines.push(`| 全库存量 | ${n(i.total.cjk)} | ${n(i.total.lat)} |`);
+    lines.push("");
+    lines.push("## 每日");
+    lines.push("");
+    lines.push("| 日期 | 星期 | 汉字 | 英文词 |");
+    lines.push("| --- | --- | ---: | ---: |");
+    for (const d of i.daily) {
+        const mark = d.vec.cjk + d.vec.lat === 0 ? "·" : n(d.vec.cjk);
+        lines.push(`| ${d.date} | ${d.weekday} | ${mark} | ${d.vec.cjk + d.vec.lat === 0 ? "·" : n(d.vec.lat)} |`);
+    }
+    lines.push("");
+    if (i.projects.length > 0) {
+        lines.push("## 项目");
+        lines.push("");
+        lines.push("| 项目 | 汉字 | 英文词 |");
+        lines.push("| --- | ---: | ---: |");
+        for (const p of i.projects) {
+            lines.push(`| ${p.name} | ${n(p.vec.cjk)} | ${n(p.vec.lat)} |`);
+        }
+        lines.push("");
+    }
+    if (i.topFiles.length > 0) {
+        lines.push("## 本周改动最多的文件");
+        lines.push("");
+        lines.push("| 文件 | 汉字 | 英文词 |");
+        lines.push("| --- | ---: | ---: |");
+        for (const f of i.topFiles) {
+            lines.push(`| ${linkFor(f.path)} | ${n(f.vec.cjk)} | ${n(f.vec.lat)} |`);
+        }
+        lines.push("");
+    }
+    lines.push("---");
+    lines.push("");
+    lines.push(`> 账本口径：只计「新增」，删改单列。数据目录 \`.obsidian/plugins/sixcolor-stats/stats/\`。`);
+    lines.push("");
+    return lines.join("\n");
+}
+function linkFor(path) {
+    const clean = path.replace(/\.md$/i, "");
+    return `[[${clean}]]`;
+}
 
 };
 __modules["scanner.ts"] = function (module, exports, require) {
@@ -349,6 +572,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.Scanner = void 0;
 const types_1 = require("./types");
 const counter_1 = require("./counter");
+const stats_1 = require("./stats");
 const TEXT_CACHE_LIMIT = 32;
 class Scanner {
     constructor(io, store, getSettings, cb = {}) {
@@ -364,16 +588,7 @@ class Scanner {
         return this.scanning;
     }
     isExcluded(path) {
-        var _a;
-        const list = (_a = this.getSettings().excludeFolders) !== null && _a !== void 0 ? _a : [];
-        for (const raw of list) {
-            const f = raw.trim().replace(/^\/+|\/+$/g, "");
-            if (!f)
-                continue;
-            if (path === f || path.startsWith(f + "/"))
-                return true;
-        }
-        return false;
+        return (0, stats_1.isExcludedPath)(path, this.getSettings());
     }
     async fullScan(rebaseline = false) {
         var _a, _b, _c, _d, _e, _f, _g, _h;
@@ -428,6 +643,10 @@ class Scanner {
             for (const [path, rec] of this.store.entries()) {
                 if (seen.has(path))
                     continue;
+                if (this.isExcluded(path)) {
+                    this.store.remove(path);
+                    continue;
+                }
                 entries.push({
                     t: Date.now(),
                     p: path,
@@ -567,7 +786,6 @@ __modules["settings.ts"] = function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatsSettingTab = void 0;
-exports.applyToSettings = applyToSettings;
 const obsidian_1 = require("obsidian");
 class StatsSettingTab extends obsidian_1.PluginSettingTab {
     constructor(app, plugin) {
@@ -581,7 +799,7 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
         containerEl.createEl("h3", { text: "统计口径" });
         containerEl.createEl("p", {
             cls: "setting-item-description",
-            text: "改动这里会让插件重建快照（不产生写作记录），历史账本不受影响。",
+            text: "改动这里会重建快照（不产生写作记录），已记录的账本不受影响。",
         });
         new obsidian_1.Setting(containerEl)
             .setName("计入 YAML frontmatter")
@@ -615,33 +833,55 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
         containerEl.createEl("h3", { text: "显示" });
         new obsidian_1.Setting(containerEl)
             .setName("主指标包含英文词")
-            .setDesc("关闭时状态栏与排序只看汉字；两个分量在面板里始终分开显示。")
+            .setDesc("关闭时状态栏只看汉字；两个分量在面板里始终分开显示。")
             .addToggle((t) => t.setValue(s.includeLatinInPrimary).onChange(async (v) => {
             s.includeLatinInPrimary = v;
             await this.plugin.applySettings(["display"]);
         }));
+        containerEl.createEl("h3", { text: "项目分组" });
+        containerEl.createEl("p", {
+            cls: "setting-item-description",
+            text: "默认按路径前两段分组（创作/小说、归档/日记……）。需要更细的粒度就写规则，每行一条：`名称 = 路径前缀`，或只写路径前缀（名称取末段）。规则按前缀最长优先。",
+        });
         new obsidian_1.Setting(containerEl)
-            .setName("柱状图天数")
-            .addSlider((sl) => sl
-            .setLimits(7, 30, 1)
-            .setValue(s.chartDays)
-            .setDynamicTooltip()
+            .setName("分组规则")
+            .addTextArea((t) => {
+            t.setPlaceholder("小说1 = 创作/小说/1\n殷浩天 = 创作/殷浩天");
+            t.setValue(s.projectRules.join("\n"));
+            t.inputEl.rows = 5;
+            t.inputEl.addClass("scs-textarea");
+            t.onChange(async (v) => {
+                s.projectRules = v
+                    .split("\n")
+                    .map((x) => x.trim())
+                    .filter(Boolean);
+                await this.plugin.applySettings(["display"]);
+            });
+        });
+        containerEl.createEl("h3", { text: "周报" });
+        new obsidian_1.Setting(containerEl)
+            .setName("周报目录")
+            .setDesc("生成的周报会写到这里。该目录自动排除在统计之外，否则周报会被算成“今天写的字”。")
+            .addText((t) => t
+            .setPlaceholder("归档/统计归档")
+            .setValue(s.reportFolder)
             .onChange(async (v) => {
-            s.chartDays = v;
-            await this.plugin.applySettings(["display"]);
+            s.reportFolder = v.trim() || "归档/统计归档";
+            await this.plugin.applySettings(["scan"]);
         }));
+        new obsidian_1.Setting(containerEl)
+            .setName("生成本周周报")
+            .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")
+            .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeWeeklyReport()));
         containerEl.createEl("h3", { text: "数据" });
         containerEl.createEl("p", {
             cls: "setting-item-description",
-            text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量，ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
+            text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
         });
         new obsidian_1.Setting(containerEl).setName("立即重建快照").addButton((b) => b.setButtonText("重建").onClick(() => void this.plugin.rebuild()));
     }
 }
 exports.StatsSettingTab = StatsSettingTab;
-function applyToSettings(target, patch) {
-    return Object.assign({}, target, patch);
-}
 
 };
 __modules["stats.ts"] = function (module, exports, require) {
@@ -1085,7 +1325,6 @@ exports.DEFAULT_SETTINGS = {
     excludeFolders: [".trash"],
     includeLatinInPrimary: false,
     panelRange: 7,
-    chartDays: 14,
     debounceMs: 2500,
     projectRules: [],
     reportFolder: "归档/统计归档",
@@ -1104,11 +1343,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatsView = exports.VIEW_TYPE_STATS = void 0;
 const obsidian_1 = require("obsidian");
 exports.VIEW_TYPE_STATS = "sixcolor-stats-view";
-const fmt = (n) => n.toLocaleString("en-US");
+const RANGES = [7, 30];
+const fmt = (n) => Math.round(n).toLocaleString("en-US");
 class StatsView extends obsidian_1.ItemView {
-    constructor(leaf, onRescan) {
+    constructor(leaf, hooks) {
         super(leaf);
-        this.onRescan = onRescan;
+        this.hooks = hooks;
         this.data = null;
     }
     getViewType() {
@@ -1131,24 +1371,34 @@ class StatsView extends obsidian_1.ItemView {
         this.render();
     }
     render() {
-        var _a;
+        var _a, _b;
         const root = this.contentEl;
         root.empty();
         root.addClass("scs-panel");
         const header = root.createDiv({ cls: "scs-header" });
         header.createDiv({ cls: "scs-title", text: "今日" });
-        const refresh = header.createEl("button", { cls: "scs-icon-btn", attr: { "aria-label": "重新扫描" } });
+        const buttons = header.createDiv({ cls: "scs-header-actions" });
+        for (const r of RANGES) {
+            const b = buttons.createEl("button", {
+                cls: "scs-range-btn" + (((_a = this.data) === null || _a === void 0 ? void 0 : _a.range) === r ? " is-active" : ""),
+                text: `${r}天`,
+            });
+            b.onclick = () => this.hooks.onRange(r);
+        }
+        const refresh = buttons.createEl("button", {
+            cls: "scs-icon-btn",
+            attr: { "aria-label": "重新扫描" },
+        });
         (0, obsidian_1.setIcon)(refresh, "refresh-cw");
-        refresh.onclick = () => this.onRescan();
+        refresh.onclick = () => this.hooks.onRescan();
         if (!this.data) {
             root.createDiv({ cls: "scs-empty", text: "正在读取…" });
             return;
         }
         const d = this.data;
         if (d.scanning && d.progress) {
-            const p = root.createDiv({ cls: "scs-progress" });
-            p.createDiv({
-                cls: "scs-progress-text",
+            root.createDiv({
+                cls: "scs-progress",
                 text: `扫描中 ${d.progress.done} / ${d.progress.total}`,
             });
         }
@@ -1163,10 +1413,14 @@ class StatsView extends obsidian_1.ItemView {
                 text: `　删改 −${fmt(d.todayDel.cjk)} / −${fmt(d.todayDel.lat)}`,
             });
         }
+        if (d.streak > 0) {
+            heroSub.createSpan({ cls: "scs-streak", text: `　连续 ${d.streak} 天` });
+        }
         const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
         const chart = chartWrap.createDiv({ cls: "scs-chart" });
         const max = Math.max(1, ...d.days.map((x) => x.vec.cjk + x.vec.lat));
-        for (const bar of d.days) {
+        const labelEvery = d.days.length > 10 ? Math.ceil(d.days.length / 6) : 1;
+        d.days.forEach((bar, i) => {
             const value = bar.vec.cjk + bar.vec.lat;
             const col = chart.createDiv({ cls: "scs-bar-col" });
             if (bar.isToday)
@@ -1174,19 +1428,34 @@ class StatsView extends obsidian_1.ItemView {
             const track = col.createDiv({ cls: "scs-bar-track" });
             const h = value <= 0 ? 0 : Math.max(4, Math.round((value / max) * 100));
             track.createDiv({ cls: "scs-bar", attr: { style: `height:${h}%` } });
-            col.createDiv({ cls: "scs-bar-label", text: bar.label });
-            col.setAttr("aria-label", `${bar.day}　汉字 ${fmt(bar.vec.cjk)}　英文词 ${fmt(bar.vec.lat)}`);
+            const showLabel = d.days.length <= 7 || bar.isToday || (d.days.length - 1 - i) % labelEvery === 0;
+            if (showLabel)
+                col.createDiv({ cls: "scs-bar-label", text: bar.label });
             col.title = `${bar.day}　汉字 ${fmt(bar.vec.cjk)}　英文词 ${fmt(bar.vec.lat)}`;
-        }
+        });
         const grid = root.createDiv({ cls: "scs-grid" });
         this.metric(grid, "本周", d.weekAdd);
         this.metric(grid, "本月", d.monthAdd);
         this.metric(grid, "全库", d.total);
+        if (d.projects.length > 0) {
+            const proj = root.createDiv({ cls: "scs-projects" });
+            proj.createDiv({ cls: "scs-section-title", text: "项目" });
+            const head = proj.createDiv({ cls: "scs-project-row is-head" });
+            head.createDiv({ cls: "scs-project-name", text: "" });
+            head.createDiv({ cls: "scs-project-num", text: "本月" });
+            head.createDiv({ cls: "scs-project-num", text: "累计" });
+            for (const p of d.projects) {
+                const row = proj.createDiv({ cls: "scs-project-row" });
+                row.createDiv({ cls: "scs-project-name", text: p.name });
+                row.createDiv({ cls: "scs-project-num", text: fmt(p.month.cjk) });
+                row.createDiv({ cls: "scs-project-num is-dim", text: fmt(p.total.cjk) });
+                row.title = `${p.name}\n本月 汉字 ${fmt(p.month.cjk)} / 词 ${fmt(p.month.lat)}\n累计 汉字 ${fmt(p.total.cjk)} / 词 ${fmt(p.total.lat)}`;
+            }
+        }
         if (d.current) {
             const cur = root.createDiv({ cls: "scs-current" });
             cur.createDiv({ cls: "scs-current-label", text: "当前文件" });
-            const name = (_a = d.current.path.split("/").pop()) !== null && _a !== void 0 ? _a : d.current.path;
-            cur.createDiv({ cls: "scs-current-name", text: name });
+            cur.createDiv({ cls: "scs-current-name", text: (_b = d.current.path.split("/").pop()) !== null && _b !== void 0 ? _b : d.current.path });
             cur.createDiv({
                 cls: "scs-current-num",
                 text: `汉字 ${fmt(d.current.vec.cjk)}　英文词 ${fmt(d.current.vec.lat)}`,

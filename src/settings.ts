@@ -1,6 +1,7 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+﻿import { App, PluginSettingTab, Setting } from "obsidian";
 import type SixColorStats from "./main";
 import type { StatsSettings } from "./types";
+import { startOfWeek } from "./stats";
 
 export type SettingsDirtyKind = "counter" | "scan" | "display";
 
@@ -116,7 +117,19 @@ export class StatsSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("生成本周周报")
       .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")
-      .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeWeeklyReport()));
+      .addButton((b) =>
+        b.setButtonText("生成").onClick(() => void this.plugin.generateReport(startOfWeek(Date.now()), true))
+      );
+
+    new Setting(containerEl)
+      .setName("自动补生成上周周报")
+      .setDesc("每次启动检查一次：上周有写作、但还没有周报文件时自动生成。")
+      .addToggle((t) =>
+        t.setValue(s.autoWeeklyReport).onChange(async (v) => {
+          s.autoWeeklyReport = v;
+          await this.plugin.applySettings(["display"]);
+        })
+      );
 
     /* ------------------------------ 数据 ------------------------------ */
 
@@ -129,5 +142,22 @@ export class StatsSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("立即重建快照").addButton((b) =>
       b.setButtonText("重建").onClick(() => void this.plugin.rebuild())
     );
+
+    new Setting(containerEl)
+      .setName("导出账本备份")
+      .setDesc("把账本合并成一个 JSON 写入下面这个目录。账本本体在 .obsidian 里不一定被同步，这份才是异地备份。")
+      .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportLedger()));
+
+    new Setting(containerEl)
+      .setName("账本备份目录")
+      .addText((t) =>
+        t
+          .setPlaceholder("归档/统计归档/账本备份")
+          .setValue(s.backupFolder)
+          .onChange(async (v) => {
+            s.backupFolder = v.trim() || "归档/统计归档/账本备份";
+            await this.plugin.applySettings(["display"]);
+          })
+      );
   }
 }

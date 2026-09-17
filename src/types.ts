@@ -61,6 +61,10 @@ export interface StatsSettings extends CounterSettings {
   projectRules: string[];
   /** 周报写入的目录 */
   reportFolder: string;
+  /** 启动时自动补生成上周周报 */
+  autoWeeklyReport: boolean;
+  /** 账本备份导出目录 */
+  backupFolder: string;
 }
 
 export const DEFAULT_SETTINGS: StatsSettings = {
@@ -72,6 +76,8 @@ export const DEFAULT_SETTINGS: StatsSettings = {
   debounceMs: 2500,
   projectRules: [],
   reportFolder: "归档/统计归档",
+  autoWeeklyReport: true,
+  backupFolder: "归档/统计归档/账本备份",
 };
 
 /* ------------------------------------------------------------------ */

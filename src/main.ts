@@ -1,4 +1,4 @@
-import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
+﻿import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "./types";
 import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
 import { StatsStore, dayKey, monthKey } from "./store";
@@ -95,7 +95,17 @@ export default class SixColorStats extends Plugin {
     this.addCommand({
       id: "weekly-report",
       name: "生成本周周报",
-      callback: () => void this.writeWeeklyReport(),
+      callback: () => void this.generateReport(startOfWeek(Date.now()), true),
+    });
+    this.addCommand({
+      id: "weekly-report-last",
+      name: "补生成上周周报",
+      callback: () => void this.generateReport(addDays(startOfWeek(Date.now()), -7), true),
+    });
+    this.addCommand({
+      id: "export-ledger",
+      name: "导出账本备份",
+      callback: () => void this.exportLedger(),
     });
 
     this.addSettingTab(new StatsSettingTab(this.app, this));
@@ -143,6 +153,7 @@ export default class SixColorStats extends Plugin {
       new Notice(`已建立快照：${res.files} 个文件。从今天起开始记账。`);
     }
     await this.refresh();
+    void this.autoWeeklyReport();
   }
 
   async rebuild(): Promise<void> {
@@ -338,9 +349,8 @@ export default class SixColorStats extends Plugin {
 
   /* ------------------------------ 周报 ------------------------------ */
 
-  async writeWeeklyReport(): Promise<void> {
-    const now = Date.now();
-    const weekStart = startOfWeek(now);
+  /** 生成某一周的周报，返回是否真的写了文件 */
+  async generateReport(weekStart: number, notify: boolean): Promise<boolean> {
     const weekEnd = addDays(weekStart, 7);
     const entries = await this.readMonths(monthsBetween(weekStart, weekEnd));
     const rules = parseProjectRules(this.settings.projectRules);
@@ -358,6 +368,8 @@ export default class SixColorStats extends Plugin {
 
     const weekSum = sumWriting(entries, weekStart, weekEnd);
     const weekDel = sumDeletions(entries, weekStart, weekEnd).del;
+    // 那一周完全没数据就不生成，免得给空周留下占位文件
+    if (weekSum.add.cjk + weekSum.add.lat + weekDel.cjk + weekDel.lat === 0) return false;
 
     const projMap = new Map<string, Vec>();
     const fileMap = new Map<string, Vec>();
@@ -372,14 +384,13 @@ export default class SixColorStats extends Plugin {
     const projects: ReportProject[] = [...projMap.entries()]
       .map(([name, v]) => ({ name, vec: v }))
       .sort((a, b) => b.vec.cjk - a.vec.cjk);
-
     const topFiles: ReportFile[] = [...fileMap.entries()]
       .map(([path, v]) => ({ path, vec: v }))
       .sort((a, b) => b.vec.cjk - a.vec.cjk)
       .slice(0, TOP_REPORT_FILES);
 
     const content = buildWeeklyReport({
-      week: isoWeek(now),
+      week: isoWeek(weekStart),
       weekStartLabel: `${new Date(weekStart).getMonth() + 1}月${new Date(weekStart).getDate()}日`,
       weekEndLabel: `${new Date(weekEnd - 86400000).getMonth() + 1}月${new Date(weekEnd - 86400000).getDate()}日`,
       add: weekSum.add,
@@ -391,25 +402,78 @@ export default class SixColorStats extends Plugin {
       daily,
       projects,
       topFiles,
-      generatedAt: now,
+      generatedAt: Date.now(),
     });
 
-    const folder = normalizePath(this.settings.reportFolder || "归档/统计归档");
-    const filePath = normalizePath(`${folder}/周报 ${isoWeek(now)}.md`);
+    const path = this.reportPath(weekStart);
     try {
-      if (!this.app.vault.getAbstractFileByPath(folder)) {
-        await this.app.vault.createFolder(folder);
-      }
-      const existing = this.app.vault.getAbstractFileByPath(filePath);
-      if (existing instanceof TFile) {
-        await this.app.vault.modify(existing, content);
-      } else {
-        await this.app.vault.create(filePath, content);
-      }
-      new Notice(`周报已写入 ${filePath}`);
+      await this.writeVaultFile(path, content);
+      if (notify) new Notice(`周报已写入 ${path}`);
+      return true;
     } catch (err) {
       new Notice(`写周报失败：${(err as Error).message}`);
+      return false;
     }
+  }
+
+  /** 启动时补上周的周报：只做一次，已有文件就不动 */
+  private async autoWeeklyReport(): Promise<void> {
+    if (!this.settings.autoWeeklyReport) return;
+    const lastWeek = addDays(startOfWeek(Date.now()), -7);
+    if (this.app.vault.getAbstractFileByPath(this.reportPath(lastWeek))) return;
+    if (await this.generateReport(lastWeek, false)) {
+      new Notice(`上周周报已生成：${this.reportPath(lastWeek)}`);
+    }
+  }
+
+  private reportPath(weekStart: number): string {
+    const folder = normalizePath(this.settings.reportFolder || "归档/统计归档");
+    return normalizePath(`${folder}/周报 ${isoWeek(weekStart)}.md`);
+  }
+
+  /**
+   * 把账本导出成一个 JSON，放到会被同步的普通目录里。
+   * 账本本身住在 .obsidian 下，remotely-save 不一定会同步它；
+   * 这个文件是真正意义上的异地备份。
+   */
+  async exportLedger(): Promise<void> {
+    const months = await this.store.listLedgerMonths();
+    if (months.length === 0) {
+      new Notice("账本还是空的，没有可导出的内容。");
+      return;
+    }
+    const all: LedgerEntry[] = [];
+    for (const ym of months) all.push(...(await this.store.readMonth(ym)));
+
+    const folder = normalizePath(this.settings.backupFolder || "归档/统计归档/账本备份");
+    const stamp = dayKey(Date.now()); // 用本地日期，别用 UTC
+    const path = normalizePath(`${folder}/账本备份 ${stamp}.json`);
+    try {
+      await this.writeVaultFile(
+        path,
+        JSON.stringify({ exportedAt: new Date().toISOString(), months, count: all.length, entries: all })
+      );
+      new Notice(`账本已导出：${path}（${all.length} 条）`);
+    } catch (err) {
+      new Notice(`导出失败：${(err as Error).message}`);
+    }
+  }
+
+  private async ensureFolder(folder: string): Promise<void> {
+    if (!folder || this.app.vault.getAbstractFileByPath(folder)) return;
+    try {
+      await this.app.vault.createFolder(folder);
+    } catch {
+      // 并发创建：忽略
+    }
+  }
+
+  private async writeVaultFile(path: string, content: string): Promise<void> {
+    const folder = path.split("/").slice(0, -1).join("/");
+    await this.ensureFolder(folder);
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) await this.app.vault.modify(existing, content);
+    else await this.app.vault.create(path, content);
   }
 
   /* ------------------------------ 界面 ------------------------------ */

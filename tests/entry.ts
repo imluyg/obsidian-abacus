@@ -175,6 +175,7 @@ async function testLedgerFlow(): Promise<void> {
   check("重启后总计", store2.total().cjk, 14);
   const raw = fs.readFileSync(path.join(data, "stats", "ledger", `${monthNow()}.jsonl`), "utf8");
   check("账本是合法 JSONL", parseLedger(raw).length, afterDelete.length);
+  check("账本月份可枚举", await store2.listLedgerMonths(), [monthNow()]);
 
   fs.rmSync(root, { recursive: true, force: true });
 }

@@ -173,7 +173,17 @@ class SixColorStats extends obsidian_1.Plugin {
         this.addCommand({
             id: "weekly-report",
             name: "生成本周周报",
-            callback: () => void this.writeWeeklyReport(),
+            callback: () => void this.generateReport((0, stats_1.startOfWeek)(Date.now()), true),
+        });
+        this.addCommand({
+            id: "weekly-report-last",
+            name: "补生成上周周报",
+            callback: () => void this.generateReport((0, stats_1.addDays)((0, stats_1.startOfWeek)(Date.now()), -7), true),
+        });
+        this.addCommand({
+            id: "export-ledger",
+            name: "导出账本备份",
+            callback: () => void this.exportLedger(),
         });
         this.addSettingTab(new settings_1.StatsSettingTab(this.app, this));
         this.registerEvent(this.app.vault.on("modify", (f) => {
@@ -211,6 +221,7 @@ class SixColorStats extends obsidian_1.Plugin {
             new obsidian_1.Notice(`已建立快照：${res.files} 个文件。从今天起开始记账。`);
         }
         await this.refresh();
+        void this.autoWeeklyReport();
     }
     async rebuild() {
         new obsidian_1.Notice("正在重建快照…");
@@ -386,10 +397,8 @@ class SixColorStats extends obsidian_1.Plugin {
             out.push(...(await this.readMonthCached(ym)));
         return out;
     }
-    async writeWeeklyReport() {
+    async generateReport(weekStart, notify) {
         var _a, _b, _c;
-        const now = Date.now();
-        const weekStart = (0, stats_1.startOfWeek)(now);
         const weekEnd = (0, stats_1.addDays)(weekStart, 7);
         const entries = await this.readMonths((0, stats_1.monthsBetween)(weekStart, weekEnd));
         const rules = (0, stats_1.parseProjectRules)(this.settings.projectRules);
@@ -406,6 +415,8 @@ class SixColorStats extends obsidian_1.Plugin {
         }
         const weekSum = (0, stats_1.sumWriting)(entries, weekStart, weekEnd);
         const weekDel = (0, stats_1.sumDeletions)(entries, weekStart, weekEnd).del;
+        if (weekSum.add.cjk + weekSum.add.lat + weekDel.cjk + weekDel.lat === 0)
+            return false;
         const projMap = new Map();
         const fileMap = new Map();
         for (const e of entries) {
@@ -424,7 +435,7 @@ class SixColorStats extends obsidian_1.Plugin {
             .sort((a, b) => b.vec.cjk - a.vec.cjk)
             .slice(0, TOP_REPORT_FILES);
         const content = (0, report_1.buildWeeklyReport)({
-            week: (0, stats_1.isoWeek)(now),
+            week: (0, stats_1.isoWeek)(weekStart),
             weekStartLabel: `${new Date(weekStart).getMonth() + 1}月${new Date(weekStart).getDate()}日`,
             weekEndLabel: `${new Date(weekEnd - 86400000).getMonth() + 1}月${new Date(weekEnd - 86400000).getDate()}日`,
             add: weekSum.add,
@@ -436,26 +447,71 @@ class SixColorStats extends obsidian_1.Plugin {
             daily,
             projects,
             topFiles,
-            generatedAt: now,
+            generatedAt: Date.now(),
         });
-        const folder = (0, obsidian_1.normalizePath)(this.settings.reportFolder || "归档/统计归档");
-        const filePath = (0, obsidian_1.normalizePath)(`${folder}/周报 ${(0, stats_1.isoWeek)(now)}.md`);
+        const path = this.reportPath(weekStart);
         try {
-            if (!this.app.vault.getAbstractFileByPath(folder)) {
-                await this.app.vault.createFolder(folder);
-            }
-            const existing = this.app.vault.getAbstractFileByPath(filePath);
-            if (existing instanceof obsidian_1.TFile) {
-                await this.app.vault.modify(existing, content);
-            }
-            else {
-                await this.app.vault.create(filePath, content);
-            }
-            new obsidian_1.Notice(`周报已写入 ${filePath}`);
+            await this.writeVaultFile(path, content);
+            if (notify)
+                new obsidian_1.Notice(`周报已写入 ${path}`);
+            return true;
         }
         catch (err) {
             new obsidian_1.Notice(`写周报失败：${err.message}`);
+            return false;
         }
+    }
+    async autoWeeklyReport() {
+        if (!this.settings.autoWeeklyReport)
+            return;
+        const lastWeek = (0, stats_1.addDays)((0, stats_1.startOfWeek)(Date.now()), -7);
+        if (this.app.vault.getAbstractFileByPath(this.reportPath(lastWeek)))
+            return;
+        if (await this.generateReport(lastWeek, false)) {
+            new obsidian_1.Notice(`上周周报已生成：${this.reportPath(lastWeek)}`);
+        }
+    }
+    reportPath(weekStart) {
+        const folder = (0, obsidian_1.normalizePath)(this.settings.reportFolder || "归档/统计归档");
+        return (0, obsidian_1.normalizePath)(`${folder}/周报 ${(0, stats_1.isoWeek)(weekStart)}.md`);
+    }
+    async exportLedger() {
+        const months = await this.store.listLedgerMonths();
+        if (months.length === 0) {
+            new obsidian_1.Notice("账本还是空的，没有可导出的内容。");
+            return;
+        }
+        const all = [];
+        for (const ym of months)
+            all.push(...(await this.store.readMonth(ym)));
+        const folder = (0, obsidian_1.normalizePath)(this.settings.backupFolder || "归档/统计归档/账本备份");
+        const stamp = (0, store_1.dayKey)(Date.now());
+        const path = (0, obsidian_1.normalizePath)(`${folder}/账本备份 ${stamp}.json`);
+        try {
+            await this.writeVaultFile(path, JSON.stringify({ exportedAt: new Date().toISOString(), months, count: all.length, entries: all }));
+            new obsidian_1.Notice(`账本已导出：${path}（${all.length} 条）`);
+        }
+        catch (err) {
+            new obsidian_1.Notice(`导出失败：${err.message}`);
+        }
+    }
+    async ensureFolder(folder) {
+        if (!folder || this.app.vault.getAbstractFileByPath(folder))
+            return;
+        try {
+            await this.app.vault.createFolder(folder);
+        }
+        catch (_a) {
+        }
+    }
+    async writeVaultFile(path, content) {
+        const folder = path.split("/").slice(0, -1).join("/");
+        await this.ensureFolder(folder);
+        const existing = this.app.vault.getAbstractFileByPath(path);
+        if (existing instanceof obsidian_1.TFile)
+            await this.app.vault.modify(existing, content);
+        else
+            await this.app.vault.create(path, content);
     }
     async activateView() {
         const { workspace } = this.app;
@@ -787,6 +843,7 @@ __modules["settings.ts"] = function (module, exports, require) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatsSettingTab = void 0;
 const obsidian_1 = require("obsidian");
+const stats_1 = require("./stats");
 class StatsSettingTab extends obsidian_1.PluginSettingTab {
     constructor(app, plugin) {
         super(app, plugin);
@@ -872,13 +929,33 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
         new obsidian_1.Setting(containerEl)
             .setName("生成本周周报")
             .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")
-            .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeWeeklyReport()));
+            .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.generateReport((0, stats_1.startOfWeek)(Date.now()), true)));
+        new obsidian_1.Setting(containerEl)
+            .setName("自动补生成上周周报")
+            .setDesc("每次启动检查一次：上周有写作、但还没有周报文件时自动生成。")
+            .addToggle((t) => t.setValue(s.autoWeeklyReport).onChange(async (v) => {
+            s.autoWeeklyReport = v;
+            await this.plugin.applySettings(["display"]);
+        }));
         containerEl.createEl("h3", { text: "数据" });
         containerEl.createEl("p", {
             cls: "setting-item-description",
             text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
         });
         new obsidian_1.Setting(containerEl).setName("立即重建快照").addButton((b) => b.setButtonText("重建").onClick(() => void this.plugin.rebuild()));
+        new obsidian_1.Setting(containerEl)
+            .setName("导出账本备份")
+            .setDesc("把账本合并成一个 JSON 写入下面这个目录。账本本体在 .obsidian 里不一定被同步，这份才是异地备份。")
+            .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportLedger()));
+        new obsidian_1.Setting(containerEl)
+            .setName("账本备份目录")
+            .addText((t) => t
+            .setPlaceholder("归档/统计归档/账本备份")
+            .setValue(s.backupFolder)
+            .onChange(async (v) => {
+            s.backupFolder = v.trim() || "归档/统计归档/账本备份";
+            await this.plugin.applySettings(["display"]);
+        }));
     }
 }
 exports.StatsSettingTab = StatsSettingTab;
@@ -1241,6 +1318,19 @@ class StatsStore {
             out.push(...(await this.readMonth(ym)));
         return out;
     }
+    async listLedgerMonths() {
+        try {
+            const res = await this.adapter.list(this.path(LEDGER_REL));
+            return res.files
+                .map((f) => { var _a; return (_a = f.split("/").pop()) !== null && _a !== void 0 ? _a : ""; })
+                .filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f))
+                .map((f) => f.replace(/\.jsonl$/, ""))
+                .sort();
+        }
+        catch (_a) {
+            return [];
+        }
+    }
     path(rel) {
         const base = this.baseDir.replace(/\/+$/, "");
         return base ? `${base}/${rel}` : rel;
@@ -1328,6 +1418,8 @@ exports.DEFAULT_SETTINGS = {
     debounceMs: 2500,
     projectRules: [],
     reportFolder: "归档/统计归档",
+    autoWeeklyReport: true,
+    backupFolder: "归档/统计归档/账本备份",
 };
 function entryAddVec(e) {
     return vec(e.add[0], e.add[1]);

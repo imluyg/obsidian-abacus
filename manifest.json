@@ -1,7 +1,7 @@
 ﻿{
   "id": "sixcolor-stats",
   "name": "SixColor Stats",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minAppVersion": "1.4.0",
   "description": "分别统计汉字与英文词，按文件、按天记账。只存事实，不存结论。",
   "author": "sixcolor",

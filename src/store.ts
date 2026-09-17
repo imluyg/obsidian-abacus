@@ -1,4 +1,4 @@
-import type { LedgerEntry, StatsAdapter, Vec } from "./types";
+﻿import type { LedgerEntry, StatsAdapter, Vec } from "./types";
 import { isZeroVec, vec, ZERO } from "./types";
 
 /**
@@ -174,6 +174,20 @@ export class StatsStore {
     const out: LedgerEntry[] = [];
     for (const ym of yms) out.push(...(await this.readMonth(ym)));
     return out;
+  }
+
+  /** 账本里已有的月份，升序 */
+  async listLedgerMonths(): Promise<string[]> {
+    try {
+      const res = await this.adapter.list(this.path(LEDGER_REL));
+      return res.files
+        .map((f) => f.split("/").pop() ?? "")
+        .filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f))
+        .map((f) => f.replace(/\.jsonl$/, ""))
+        .sort();
+    } catch {
+      return [];
+    }
   }
 
   /* ------------------------------ 工具 ------------------------------ */

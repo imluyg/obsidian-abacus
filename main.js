@@ -185,6 +185,11 @@ class SixColorStats extends obsidian_1.Plugin {
             name: "导出账本备份",
             callback: () => void this.exportLedger(),
         });
+        this.addCommand({
+            id: "audit-ledger",
+            name: "检查账本完整性",
+            callback: () => void this.auditLedger(),
+        });
         this.addSettingTab(new settings_1.StatsSettingTab(this.app, this));
         this.registerEvent(this.app.vault.on("modify", (f) => {
             if (f instanceof obsidian_1.TFile && f.extension === "md")
@@ -222,6 +227,7 @@ class SixColorStats extends obsidian_1.Plugin {
         }
         await this.refresh();
         void this.autoWeeklyReport();
+        void this.checkLedgerHealth();
     }
     async rebuild() {
         new obsidian_1.Notice("正在重建快照…");
@@ -512,6 +518,51 @@ class SixColorStats extends obsidian_1.Plugin {
             await this.app.vault.modify(existing, content);
         else
             await this.app.vault.create(path, content);
+    }
+    async checkLedgerHealth() {
+        if (this.store.repairs.length > 0) {
+            const dropped = this.store.repairs.reduce((n, r) => n + r.dropped, 0);
+            new obsidian_1.Notice(`账本末尾发现截断，已丢弃 ${dropped} 个字符的残行后继续记录。`, 8000);
+            this.store.repairs.length = 0;
+        }
+        const now = Date.now();
+        const months = [...new Set([(0, store_1.monthKey)(now), (0, store_1.monthKey)((0, stats_1.addDays)(now, -40))])];
+        const a = await this.store.audit(months);
+        if (a.problems.length === 0)
+            return;
+        new obsidian_1.Notice(`账本体检有 ${a.problems.length} 项异常：${a.problems[0]}　（命令面板 → 检查账本完整性）`, 10000);
+    }
+    async auditLedger() {
+        const a = await this.store.audit();
+        if (a.problems.length === 0) {
+            new obsidian_1.Notice(`账本正常：${a.months.length} 个月 · ${a.totalEntries} 条事件`);
+            return;
+        }
+        const lines = [
+            `# 账本体检 ${(0, store_1.dayKey)(Date.now())}`,
+            "",
+            `- 覆盖月份：${a.months.join("、") || "（空）"}`,
+            `- 事件总数：${a.totalEntries}`,
+            `- 无法解析的行：${a.badLines}`,
+            `- 末尾缺换行：${a.truncated.join("、") || "无"}`,
+            `- 重复事件：${a.duplicates}`,
+            `- 未来时间戳：${a.future}`,
+            "",
+            "## 问题",
+            "",
+            ...a.problems.map((p) => `- ${p}`),
+            "",
+            "> 账本无法重建。体检发现异常时，先做一次「导出账本备份」再排查。",
+        ];
+        const folder = this.settings.reportFolder || "归档/统计归档";
+        const path = (0, obsidian_1.normalizePath)(`${folder}/账本体检 ${(0, store_1.dayKey)(Date.now())}.md`);
+        try {
+            await this.writeVaultFile(path, lines.join("\n"));
+            new obsidian_1.Notice(`账本体检发现 ${a.problems.length} 项问题，已写入 ${path}`, 10000);
+        }
+        catch (err) {
+            new obsidian_1.Notice(`体检报告写入失败：${err.message}`);
+        }
     }
     async activateView() {
         const { workspace } = this.app;
@@ -1174,7 +1225,9 @@ __modules["store.ts"] = function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ZERO = exports.StatsStore = void 0;
+exports.parseLedgerReport = parseLedgerReport;
 exports.parseLedger = parseLedger;
+exports.repairTail = repairTail;
 exports.monthKey = monthKey;
 exports.dayKey = dayKey;
 const types_1 = require("./types");
@@ -1189,6 +1242,7 @@ class StatsStore {
         this.records = new Map();
         this.loaded = false;
         this.saveTimer = null;
+        this.repairs = [];
     }
     get isLoaded() {
         return this.loaded;
@@ -1299,8 +1353,10 @@ class StatsStore {
             catch (_a) {
                 prev = "";
             }
-            const next = (prev && !prev.endsWith("\n") ? prev + "\n" : prev) + lines.join("\n") + "\n";
-            await this.adapter.write(this.path(rel), next);
+            const { text, dropped } = repairTail(prev);
+            if (dropped > 0)
+                this.repairs.push({ ym, dropped });
+            await this.adapter.write(this.path(rel), text + lines.join("\n") + "\n");
         }
     }
     async readMonth(ym) {
@@ -1331,6 +1387,59 @@ class StatsStore {
             return [];
         }
     }
+    async audit(months) {
+        const list = months !== null && months !== void 0 ? months : (await this.listLedgerMonths());
+        const now = Date.now();
+        const seen = new Set();
+        const result = {
+            months: list,
+            totalEntries: 0,
+            badLines: 0,
+            truncated: [],
+            duplicates: 0,
+            future: 0,
+            first: null,
+            last: null,
+            problems: [],
+        };
+        for (const ym of list) {
+            let raw = "";
+            try {
+                raw = await this.adapter.read(this.path(this.ledgerPath(ym)));
+            }
+            catch (_a) {
+                continue;
+            }
+            if (raw.length > 0 && !raw.endsWith("\n"))
+                result.truncated.push(ym);
+            const parsed = parseLedgerReport(raw);
+            result.badLines += parsed.bad;
+            result.totalEntries += parsed.entries.length;
+            for (const e of parsed.entries) {
+                const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
+                if (seen.has(key))
+                    result.duplicates++;
+                else
+                    seen.add(key);
+                if (e.t > now + 3600000)
+                    result.future++;
+                if (result.first === null || e.t < result.first)
+                    result.first = e.t;
+                if (result.last === null || e.t > result.last)
+                    result.last = e.t;
+            }
+        }
+        if (result.badLines > 0)
+            result.problems.push(`${result.badLines} 行无法解析（同步冲突或写入被截断）`);
+        if (result.truncated.length > 0) {
+            result.problems.push(`末尾缺换行：${result.truncated.join("、")}（疑似被截断，下次追加会自动修复）`);
+        }
+        if (result.duplicates > 0)
+            result.problems.push(`${result.duplicates} 条重复事件（同一条被写了两次）`);
+        if (result.future > 0)
+            result.problems.push(`${result.future} 条时间戳在未来（时钟或时区不正确）`);
+        return result;
+    }
     path(rel) {
         const base = this.baseDir.replace(/\/+$/, "");
         return base ? `${base}/${rel}` : rel;
@@ -1349,21 +1458,45 @@ class StatsStore {
     }
 }
 exports.StatsStore = StatsStore;
-function parseLedger(raw) {
-    const out = [];
+function parseLedgerReport(raw) {
+    const entries = [];
+    let bad = 0;
+    if (!raw)
+        return { entries, bad };
     for (const line of raw.split("\n")) {
         const s = line.trim();
         if (!s)
             continue;
         try {
             const e = JSON.parse(s);
-            if (typeof e.t === "number" && typeof e.p === "string" && Array.isArray(e.add))
-                out.push(e);
+            if (typeof e.t === "number" && typeof e.p === "string" && Array.isArray(e.add) && Array.isArray(e.del)) {
+                entries.push(e);
+            }
+            else {
+                bad++;
+            }
         }
         catch (_a) {
+            bad++;
         }
     }
-    return out;
+    return { entries, bad };
+}
+function parseLedger(raw) {
+    return parseLedgerReport(raw).entries;
+}
+function repairTail(prev) {
+    if (!prev || prev.endsWith("\n"))
+        return { text: prev, dropped: 0 };
+    const idx = prev.lastIndexOf("\n");
+    const tail = prev.slice(idx + 1);
+    try {
+        JSON.parse(tail);
+        return { text: prev + "\n", dropped: 0 };
+    }
+    catch (_a) {
+        return { text: idx >= 0 ? prev.slice(0, idx + 1) : "", dropped: tail.length };
+    }
 }
 function monthKey(ts) {
     const d = new Date(ts);

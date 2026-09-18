@@ -1,4 +1,4 @@
-﻿import type { LedgerEntry, StatsAdapter, Vec } from "./types";
+import type { LedgerEntry, StatsAdapter, Vec } from "./types";
 import { isZeroVec, vec, ZERO } from "./types";
 
 /**
@@ -155,8 +155,9 @@ export class StatsStore {
       } catch {
         prev = "";
       }
-      const next = (prev && !prev.endsWith("\n") ? prev + "\n" : prev) + lines.join("\n") + "\n";
-      await this.adapter.write(this.path(rel), next);
+      const { text, dropped } = repairTail(prev);
+      if (dropped > 0) this.repairs.push({ ym, dropped });
+      await this.adapter.write(this.path(rel), text + lines.join("\n") + "\n");
     }
   }
 
@@ -192,6 +193,59 @@ export class StatsStore {
 
   /* ------------------------------ 工具 ------------------------------ */
 
+  /** 本次运行里修掉过的截断尾巴，供上层提示 */
+  readonly repairs: { ym: string; dropped: number }[] = [];
+
+  /**
+   * 体检：坏行、截断、重复、未来时间戳。
+   * 只读，不改文件——发现问题由人决定怎么处理。
+   */
+  async audit(months?: string[]): Promise<LedgerAudit> {
+    const list = months ?? (await this.listLedgerMonths());
+    const now = Date.now();
+    const seen = new Set<string>();
+    const result: LedgerAudit = {
+      months: list,
+      totalEntries: 0,
+      badLines: 0,
+      truncated: [],
+      duplicates: 0,
+      future: 0,
+      first: null,
+      last: null,
+      problems: [],
+    };
+
+    for (const ym of list) {
+      let raw = "";
+      try {
+        raw = await this.adapter.read(this.path(this.ledgerPath(ym)));
+      } catch {
+        continue;
+      }
+      if (raw.length > 0 && !raw.endsWith("\n")) result.truncated.push(ym);
+      const parsed = parseLedgerReport(raw);
+      result.badLines += parsed.bad;
+      result.totalEntries += parsed.entries.length;
+      for (const e of parsed.entries) {
+        const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
+        if (seen.has(key)) result.duplicates++;
+        else seen.add(key);
+        if (e.t > now + 3_600_000) result.future++;
+        if (result.first === null || e.t < result.first) result.first = e.t;
+        if (result.last === null || e.t > result.last) result.last = e.t;
+      }
+    }
+
+    if (result.badLines > 0) result.problems.push(`${result.badLines} 行无法解析（同步冲突或写入被截断）`);
+    if (result.truncated.length > 0) {
+      result.problems.push(`末尾缺换行：${result.truncated.join("、")}（疑似被截断，下次追加会自动修复）`);
+    }
+    if (result.duplicates > 0) result.problems.push(`${result.duplicates} 条重复事件（同一条被写了两次）`);
+    if (result.future > 0) result.problems.push(`${result.future} 条时间戳在未来（时钟或时区不正确）`);
+    return result;
+  }
+
   private path(rel: string): string {
     const base = this.baseDir.replace(/\/+$/, "");
     return base ? `${base}/${rel}` : rel;
@@ -211,19 +265,60 @@ export class StatsStore {
   }
 }
 
-export function parseLedger(raw: string): LedgerEntry[] {
-  const out: LedgerEntry[] = [];
+export interface LedgerAudit {
+  months: string[];
+  totalEntries: number;
+  badLines: number;
+  /** 末尾缺换行的月份文件 */
+  truncated: string[];
+  duplicates: number;
+  future: number;
+  first: number | null;
+  last: number | null;
+  problems: string[];
+}
+
+export function parseLedgerReport(raw: string): { entries: LedgerEntry[]; bad: number } {
+  const entries: LedgerEntry[] = [];
+  let bad = 0;
+  if (!raw) return { entries, bad };
   for (const line of raw.split("\n")) {
     const s = line.trim();
     if (!s) continue;
     try {
       const e = JSON.parse(s) as LedgerEntry;
-      if (typeof e.t === "number" && typeof e.p === "string" && Array.isArray(e.add)) out.push(e);
+      if (typeof e.t === "number" && typeof e.p === "string" && Array.isArray(e.add) && Array.isArray(e.del)) {
+        entries.push(e);
+      } else {
+        bad++;
+      }
     } catch {
-      // 坏行跳过：可能是同步冲突写坏的半行
+      // 半行 / 同步冲突写坏的那一行
+      bad++;
     }
   }
-  return out;
+  return { entries, bad };
+}
+
+export function parseLedger(raw: string): LedgerEntry[] {
+  return parseLedgerReport(raw).entries;
+}
+
+/**
+ * 追加前的保险：如果文件末尾是半行（同步冲突、断电），
+ * 直接往后拼会把新行粘在坏行上，坏行就永久留在账本里。
+ * 这里先把它截掉，只损失那一行。
+ */
+export function repairTail(prev: string): { text: string; dropped: number } {
+  if (!prev || prev.endsWith("\n")) return { text: prev, dropped: 0 };
+  const idx = prev.lastIndexOf("\n");
+  const tail = prev.slice(idx + 1);
+  try {
+    JSON.parse(tail);
+    return { text: prev + "\n", dropped: 0 }; // 完整的一行，只是缺换行
+  } catch {
+    return { text: idx >= 0 ? prev.slice(0, idx + 1) : "", dropped: tail.length };
+  }
 }
 
 /** 本地时区的 YYYY-MM */

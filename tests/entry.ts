@@ -11,7 +11,7 @@ import * as path from "node:path";
 import type { LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "../src/types";
 import { DEFAULT_SETTINGS } from "../src/types";
 import { countMarkdown, diffCounts } from "../src/counter";
-import { StatsStore, parseLedger } from "../src/store";
+import { StatsStore, parseLedger, parseLedgerReport, repairTail } from "../src/store";
 import { Scanner } from "../src/scanner";
 import {
   byDay,
@@ -180,8 +180,57 @@ async function testLedgerFlow(): Promise<void> {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+async function testLedgerIntegrity(): Promise<void> {
+  console.log("\n[4] 账本完整性");
+
+  check("空文件不修", repairTail(""), { text: "", dropped: 0 });
+  check("正常结尾不动", repairTail('{"a":1}\n'), { text: '{"a":1}\n', dropped: 0 });
+  check("完整行缺换行只补换行", repairTail('{"a":1}'), { text: '{"a":1}\n', dropped: 0 });
+  check("半行被截掉", repairTail('{"a":1}\n{"b":'), { text: '{"a":1}\n', dropped: 5 });
+  check("整个文件都是半行", repairTail('{"b":').text, "");
+
+  const good = JSON.stringify({ t: 1000, p: "a.md", add: [1, 0], del: [0, 0], src: "edit" });
+  const report = parseLedgerReport(`${good}\n坏行\n${good}\n`);
+  check("解析：好行数", report.entries.length, 2);
+  check("解析：坏行数", report.bad, 1);
+
+  // 模拟一次同步冲突：同一行写了两遍，外加一行写坏
+  const raw = `${good}\n${good}\n坏行\n`;
+  const adapter = {
+    read: async () => raw,
+    write: async () => void 0,
+    exists: async () => true,
+    mkdir: async () => void 0,
+    list: async () => ({ files: ["stats/ledger/2026-11.jsonl"], folders: [] }),
+  };
+  const store = new StatsStore("", adapter as never);
+  const audit = await store.audit();
+  check("审计：事件数", audit.totalEntries, 2);
+  check("审计：坏行", audit.badLines, 1);
+  check("审计：重复", audit.duplicates, 1);
+  check("审计：给出问题", audit.problems.length > 0, true);
+
+  // 追加时自动截掉坏尾，坏行不会永久留在账本里
+  const broken = `${good}\n{"t":2,"p":"y`;
+  let written = "";
+  const adapter2 = {
+    read: async () => broken,
+    write: async (_p: string, d: string) => {
+      written = d;
+    },
+    exists: async () => true,
+    mkdir: async () => void 0,
+    list: async () => ({ files: [], folders: [] }),
+  };
+  const store2 = new StatsStore("", adapter2 as never);
+  await store2.append([{ t: 3, p: "z.md", add: [5, 0], del: [0, 0], src: "edit" }]);
+  check("追加后坏尾消失", written.includes('"p":"y'), false);
+  check("追加后新行完整", written.trimEnd().endsWith('{"t":3,"p":"z.md","add":[5,0],"del":[0,0],"src":"edit"}'), true);
+  check("修复被记录", store2.repairs.length, 1);
+}
+
 async function testRealVault(vaultRoot: string): Promise<void> {
-  console.log(`\n[4] 真实库扫描：${vaultRoot}`);
+  console.log(`\n[5] 真实库扫描：${vaultRoot}`);
   const dataRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-data-"));
   const settings: StatsSettings = { ...DEFAULT_SETTINGS };
   const store = new StatsStore("", new FsAdapter(dataRoot));
@@ -263,6 +312,7 @@ async function main(): Promise<void> {
   await testCounter();
   await testStatsHelpers();
   await testLedgerFlow();
+  await testLedgerIntegrity();
   const vault = process.argv[2];
   if (vault && fs.existsSync(vault)) await testRealVault(vault);
   console.log(failures === 0 ? "\n全部通过 ✓" : `\n${failures} 项失败 ✗`);

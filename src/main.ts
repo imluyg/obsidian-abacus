@@ -1,4 +1,4 @@
-﻿import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
+import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "./types";
 import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
 import { StatsStore, dayKey, monthKey } from "./store";
@@ -107,6 +107,11 @@ export default class SixColorStats extends Plugin {
       name: "导出账本备份",
       callback: () => void this.exportLedger(),
     });
+    this.addCommand({
+      id: "audit-ledger",
+      name: "检查账本完整性",
+      callback: () => void this.auditLedger(),
+    });
 
     this.addSettingTab(new StatsSettingTab(this.app, this));
 
@@ -154,6 +159,7 @@ export default class SixColorStats extends Plugin {
     }
     await this.refresh();
     void this.autoWeeklyReport();
+    void this.checkLedgerHealth();
   }
 
   async rebuild(): Promise<void> {
@@ -474,6 +480,60 @@ export default class SixColorStats extends Plugin {
     const existing = this.app.vault.getAbstractFileByPath(path);
     if (existing instanceof TFile) await this.app.vault.modify(existing, content);
     else await this.app.vault.create(path, content);
+  }
+
+  /* ------------------------------ 体检 ------------------------------ */
+
+  /** 启动时的轻量体检：只看最近两个月，只有发现问题才打扰你 */
+  private async checkLedgerHealth(): Promise<void> {
+    if (this.store.repairs.length > 0) {
+      const dropped = this.store.repairs.reduce((n, r) => n + r.dropped, 0);
+      new Notice(`账本末尾发现截断，已丢弃 ${dropped} 个字符的残行后继续记录。`, 8000);
+      this.store.repairs.length = 0;
+    }
+
+    const now = Date.now();
+    const months = [...new Set([monthKey(now), monthKey(addDays(now, -40))])];
+    const a = await this.store.audit(months);
+    if (a.problems.length === 0) return;
+    new Notice(
+      `账本体检有 ${a.problems.length} 项异常：${a.problems[0]}　（命令面板 → 检查账本完整性）`,
+      10000
+    );
+  }
+
+  async auditLedger(): Promise<void> {
+    const a = await this.store.audit();
+    if (a.problems.length === 0) {
+      new Notice(`账本正常：${a.months.length} 个月 · ${a.totalEntries} 条事件`);
+      return;
+    }
+
+    const lines: string[] = [
+      `# 账本体检 ${dayKey(Date.now())}`,
+      "",
+      `- 覆盖月份：${a.months.join("、") || "（空）"}`,
+      `- 事件总数：${a.totalEntries}`,
+      `- 无法解析的行：${a.badLines}`,
+      `- 末尾缺换行：${a.truncated.join("、") || "无"}`,
+      `- 重复事件：${a.duplicates}`,
+      `- 未来时间戳：${a.future}`,
+      "",
+      "## 问题",
+      "",
+      ...a.problems.map((p) => `- ${p}`),
+      "",
+      "> 账本无法重建。体检发现异常时，先做一次「导出账本备份」再排查。",
+    ];
+
+    const folder = this.settings.reportFolder || "归档/统计归档";
+    const path = normalizePath(`${folder}/账本体检 ${dayKey(Date.now())}.md`);
+    try {
+      await this.writeVaultFile(path, lines.join("\n"));
+      new Notice(`账本体检发现 ${a.problems.length} 项问题，已写入 ${path}`, 10000);
+    } catch (err) {
+      new Notice(`体检报告写入失败：${(err as Error).message}`);
+    }
   }
 
   /* ------------------------------ 界面 ------------------------------ */

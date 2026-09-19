@@ -145,6 +145,8 @@ class AbacusPlugin extends obsidian_1.Plugin {
         this.streakCache = null;
         this.health = null;
         this.selectedProject = null;
+        this.fmQueue = new Set();
+        this.fmTimer = null;
     }
     async onload() {
         var _a;
@@ -173,6 +175,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
                 this.scheduleRefresh(120);
             },
             onChange: () => this.invalidate(),
+            onCounted: (path) => this.queueFrontmatter(path),
         });
         this.registerView(view_1.VIEW_TYPE_STATS, (leaf) => new view_1.StatsView(leaf, {
             onRescan: () => void this.rebuild(),
@@ -202,6 +205,25 @@ class AbacusPlugin extends obsidian_1.Plugin {
             id: "export-ledger",
             name: "导出账本备份",
             callback: () => void this.exportLedger(),
+        });
+        this.addCommand({
+            id: "sync-frontmatter",
+            name: "把字数写入当前笔记属性",
+            callback: async () => {
+                const file = this.app.workspace.getActiveFile();
+                if (!file) {
+                    new obsidian_1.Notice("没有打开的笔记。");
+                    return;
+                }
+                const rec = this.store.get(file.path);
+                if (!rec) {
+                    new obsidian_1.Notice("这篇还没统计到，先保存一次。");
+                    return;
+                }
+                const key = this.settings.frontmatterKey || "words";
+                const changed = await this.syncFrontmatter(file.path, true);
+                new obsidian_1.Notice(changed ? `已写入 ${key}: ${rec.vec.cjk}` : `${key} 已经是最新（${rec.vec.cjk}）`);
+            },
         });
         this.addCommand({
             id: "audit-ledger",
@@ -471,6 +493,49 @@ class AbacusPlugin extends obsidian_1.Plugin {
         for (const ym of yms)
             out.push(...(await this.readMonthCached(ym)));
         return out;
+    }
+    queueFrontmatter(path) {
+        if (!this.settings.writeFrontmatter)
+            return;
+        this.fmQueue.add(path);
+        if (this.fmTimer !== null)
+            window.clearTimeout(this.fmTimer);
+        this.fmTimer = window.setTimeout(() => {
+            this.fmTimer = null;
+            void this.flushFrontmatter();
+        }, 1500);
+    }
+    async flushFrontmatter() {
+        const paths = [...this.fmQueue];
+        this.fmQueue.clear();
+        for (const p of paths)
+            await this.syncFrontmatter(p);
+    }
+    async syncFrontmatter(path, force = false) {
+        if (!force && !this.settings.writeFrontmatter)
+            return false;
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof obsidian_1.TFile))
+            return false;
+        const rec = this.store.get(path);
+        if (!rec)
+            return false;
+        const key = this.settings.frontmatterKey || "words";
+        const wanted = rec.vec.cjk;
+        let changed = false;
+        try {
+            await this.app.fileManager.processFrontMatter(file, (fm) => {
+                if (fm[key] !== wanted) {
+                    fm[key] = wanted;
+                    changed = true;
+                }
+            });
+        }
+        catch (err) {
+            new obsidian_1.Notice(`写入 ${key} 失败：${err.message}`);
+            return false;
+        }
+        return changed;
     }
     async generateReport(weekStart, notify) {
         var _a, _b, _c, _d;
@@ -908,13 +973,13 @@ class Scanner {
         await this.store.saveSnapshot();
     }
     async processEdit(path) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
         const opts = this.getSettings();
         let text;
         try {
             text = await this.io.readFile(path);
         }
-        catch (_j) {
+        catch (_l) {
             return;
         }
         const v = (0, counter_1.countMarkdown)(text, opts);
@@ -950,16 +1015,17 @@ class Scanner {
                 vec: v,
             });
         }
-        catch (_k) {
+        catch (_m) {
             this.store.set(path, { size: (_e = rec === null || rec === void 0 ? void 0 : rec.size) !== null && _e !== void 0 ? _e : 0, mtime: (_f = rec === null || rec === void 0 ? void 0 : rec.mtime) !== null && _f !== void 0 ? _f : 0, vec: v });
         }
         if (!(0, types_1.isZeroVec)(add) || !(0, types_1.isZeroVec)(del)) {
             await this.store.append([
                 { t: Date.now(), p: path, add: toTuple(add), del: toTuple(del), src: "edit" },
             ]);
+            (_h = (_g = this.cb).onCounted) === null || _h === void 0 ? void 0 : _h.call(_g, path, v);
         }
         this.store.scheduleSave();
-        (_h = (_g = this.cb).onChange) === null || _h === void 0 ? void 0 : _h.call(_g);
+        (_k = (_j = this.cb).onChange) === null || _k === void 0 ? void 0 : _k.call(_j);
     }
     splitDelta(prev, next) {
         const d = (0, types_1.subVec)(next, prev);
@@ -1033,6 +1099,28 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
             .setDesc("关闭时状态栏只看汉字；两个分量在面板里始终分开显示。")
             .addToggle((t) => t.setValue(s.includeLatinInPrimary).onChange(async (v) => {
             s.includeLatinInPrimary = v;
+            await this.plugin.applySettings(["display"]);
+        }));
+        containerEl.createEl("h3", { text: "笔记属性" });
+        containerEl.createEl("p", {
+            cls: "setting-item-description",
+            text: "把汉字数写进笔记的 frontmatter，供 Bases / Dataview 排序、筛选、做公式。这会修改你的笔记，所以默认关闭。",
+        });
+        new obsidian_1.Setting(containerEl)
+            .setName("保存时把字数写进属性")
+            .setDesc("只在内容真的变化时写；值没变不会动文件，所以不会触发死循环。")
+            .addToggle((t) => t.setValue(s.writeFrontmatter).onChange(async (v) => {
+            s.writeFrontmatter = v;
+            await this.plugin.applySettings(["display"]);
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName("属性名")
+            .setDesc("默认 words。只写汉字数，英文词去账本里看。")
+            .addText((t) => t
+            .setPlaceholder("words")
+            .setValue(s.frontmatterKey)
+            .onChange(async (v) => {
+            s.frontmatterKey = v.trim() || "words";
             await this.plugin.applySettings(["display"]);
         }));
         containerEl.createEl("h3", { text: "目标" });
@@ -1713,6 +1801,8 @@ exports.DEFAULT_SETTINGS = {
     countCodeBlocks: false,
     excludeFolders: [".trash"],
     includeLatinInPrimary: false,
+    writeFrontmatter: false,
+    frontmatterKey: "words",
     dailyGoal: 0,
     weeklyGoal: 0,
     panelRange: 7,

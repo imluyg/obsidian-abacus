@@ -63,6 +63,8 @@ export default class AbacusPlugin extends Plugin {
   private health: HealthInfo | null = null;
   /** 面板里当前展开的项目（null = 未展开） */
   private selectedProject: string | null = null;
+  private fmQueue = new Set<string>();
+  private fmTimer: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -93,6 +95,7 @@ export default class AbacusPlugin extends Plugin {
         this.scheduleRefresh(120);
       },
       onChange: () => this.invalidate(),
+      onCounted: (path) => this.queueFrontmatter(path),
     });
 
     this.registerView(
@@ -130,6 +133,25 @@ export default class AbacusPlugin extends Plugin {
       id: "export-ledger",
       name: "导出账本备份",
       callback: () => void this.exportLedger(),
+    });
+    this.addCommand({
+      id: "sync-frontmatter",
+      name: "把字数写入当前笔记属性",
+      callback: async () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) {
+          new Notice("没有打开的笔记。");
+          return;
+        }
+        const rec = this.store.get(file.path);
+        if (!rec) {
+          new Notice("这篇还没统计到，先保存一次。");
+          return;
+        }
+        const key = this.settings.frontmatterKey || "words";
+        const changed = await this.syncFrontmatter(file.path, true);
+        new Notice(changed ? `已写入 ${key}: ${rec.vec.cjk}` : `${key} 已经是最新（${rec.vec.cjk}）`);
+      },
     });
     this.addCommand({
       id: "audit-ledger",
@@ -428,6 +450,55 @@ export default class AbacusPlugin extends Plugin {
     const out: LedgerEntry[] = [];
     for (const ym of yms) out.push(...(await this.readMonthCached(ym)));
     return out;
+  }
+
+  /* ---------------------------- 笔记属性 ---------------------------- */
+
+  /** 排队写回 frontmatter：去抖，避免每敲一次字就改文件 */
+  private queueFrontmatter(path: string): void {
+    if (!this.settings.writeFrontmatter) return;
+    this.fmQueue.add(path);
+    if (this.fmTimer !== null) window.clearTimeout(this.fmTimer);
+    this.fmTimer = window.setTimeout(() => {
+      this.fmTimer = null;
+      void this.flushFrontmatter();
+    }, 1500);
+  }
+
+  private async flushFrontmatter(): Promise<void> {
+    const paths = [...this.fmQueue];
+    this.fmQueue.clear();
+    for (const p of paths) await this.syncFrontmatter(p);
+  }
+
+  /**
+   * 把汉字数写回某篇笔记的 frontmatter。
+   *
+   * 值没变就什么都不做——否则会「写属性 → 触发 modify → 再写」打成死循环。
+   * 只写汉字数，不写英文词：属性是给 Base / Dataview 排序用的，
+   * 要分量去账本里看，那里才是事实。
+   */
+  async syncFrontmatter(path: string, force = false): Promise<boolean> {
+    if (!force && !this.settings.writeFrontmatter) return false;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return false;
+    const rec = this.store.get(path);
+    if (!rec) return false;
+    const key = this.settings.frontmatterKey || "words";
+    const wanted = rec.vec.cjk;
+    let changed = false;
+    try {
+      await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+        if (fm[key] !== wanted) {
+          fm[key] = wanted;
+          changed = true;
+        }
+      });
+    } catch (err) {
+      new Notice(`写入 ${key} 失败：${(err as Error).message}`);
+      return false;
+    }
+    return changed;
   }
 
   /* ------------------------------ 周报 ------------------------------ */

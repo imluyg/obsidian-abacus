@@ -24,6 +24,8 @@ const TEXT_CACHE_LIMIT = 32;
 export interface ScanCallbacks {
   onProgress?: (done: number, total: number) => void;
   onChange?: () => void;
+  /** 内容真的变了之后回调，用于把字数写回 frontmatter */
+  onCounted?: (path: string, vec: Vec) => void;
 }
 
 export class Scanner {
@@ -223,6 +225,7 @@ export class Scanner {
       await this.store.append([
         { t: Date.now(), p: path, add: toTuple(add), del: toTuple(del), src: "edit" },
       ]);
+      this.cb.onCounted?.(path, v);
     }
     this.store.scheduleSave();
     this.cb.onChange?.();

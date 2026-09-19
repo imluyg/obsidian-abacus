@@ -1,6 +1,6 @@
 {
   "name": "abacus",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Obsidian 字数统计插件：双分量计数 + 追加式账本",
   "main": "main.js",
   "scripts": {

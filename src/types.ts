@@ -53,6 +53,10 @@ export interface StatsSettings extends CounterSettings {
   excludeFolders: string[];
   /** 状态栏与排序使用的主指标是否包含英文词 */
   includeLatinInPrimary: boolean;
+  /** 是否把汉字数写回笔记 frontmatter（会修改笔记，默认关闭） */
+  writeFrontmatter: boolean;
+  /** frontmatter 里用的属性名 */
+  frontmatterKey: string;
   /** 每日目标（汉字），0 表示不设目标 */
   dailyGoal: number;
   /** 每周目标（汉字），0 表示不设目标 */
@@ -76,6 +80,8 @@ export const DEFAULT_SETTINGS: StatsSettings = {
   countCodeBlocks: false,
   excludeFolders: [".trash"],
   includeLatinInPrimary: false,
+  writeFrontmatter: false,
+  frontmatterKey: "words",
   dailyGoal: 0,
   weeklyGoal: 0,
   panelRange: 7,

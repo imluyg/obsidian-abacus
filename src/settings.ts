@@ -73,6 +73,37 @@ export class StatsSettingTab extends PluginSettingTab {
         })
       );
 
+    /* ------------------------------ 属性 ------------------------------ */
+
+    containerEl.createEl("h3", { text: "笔记属性" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "把汉字数写进笔记的 frontmatter，供 Bases / Dataview 排序、筛选、做公式。这会修改你的笔记，所以默认关闭。",
+    });
+
+    new Setting(containerEl)
+      .setName("保存时把字数写进属性")
+      .setDesc("只在内容真的变化时写；值没变不会动文件，所以不会触发死循环。")
+      .addToggle((t) =>
+        t.setValue(s.writeFrontmatter).onChange(async (v) => {
+          s.writeFrontmatter = v;
+          await this.plugin.applySettings(["display"]);
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("属性名")
+      .setDesc("默认 words。只写汉字数，英文词去账本里看。")
+      .addText((t) =>
+        t
+          .setPlaceholder("words")
+          .setValue(s.frontmatterKey)
+          .onChange(async (v) => {
+            s.frontmatterKey = v.trim() || "words";
+            await this.plugin.applySettings(["display"]);
+          })
+      );
+
     /* ------------------------------ 目标 ------------------------------ */
 
     containerEl.createEl("h3", { text: "目标" });

@@ -1,12 +1,12 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import type SixColorStats from "./main";
+import type AbacusPlugin from "./main";
 import type { StatsSettings } from "./types";
 import { startOfWeek } from "./stats";
 
 export type SettingsDirtyKind = "counter" | "scan" | "display";
 
 export class StatsSettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: SixColorStats) {
+  constructor(app: App, private plugin: AbacusPlugin) {
     super(app, plugin);
   }
 
@@ -136,7 +136,7 @@ export class StatsSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "数据" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
+      text: "数据目录：.obsidian/plugins/abacus/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
     });
 
     new Setting(containerEl).setName("立即重建快照").addButton((b) =>

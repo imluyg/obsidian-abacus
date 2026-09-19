@@ -94,7 +94,7 @@ if (isTest) {
     `globalThis.window = globalThis;\nrequire(${JSON.stringify(path.join(outDir, "tests", "entry.js"))});\n`,
     "utf8"
   );
-  const vault = vaultArg ?? root.replace(/\\\.sixcolor-stats$/, "");
+  const vault = vaultArg ?? root.replace(/\\\.abacus$/, "");
   const res = spawnSync(process.execPath, [boot, vault], { stdio: "inherit" });
   process.exit(res.status ?? 1);
 }
@@ -124,7 +124,7 @@ for (const f of files) {
 }
 
 const prelude = `/*
- * SixColor Stats — 由 build.mjs 从 src/*.ts 生成，请勿直接编辑。
+ * Abacus — 由 build.mjs 从 src/*.ts 生成，请勿直接编辑。
  */
 "use strict";
 var __hostRequire = typeof require === "function" ? require : null;

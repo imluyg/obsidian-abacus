@@ -51,7 +51,7 @@ export function buildWeeklyReport(i: WeeklyReportInput): string {
   lines.push(`# 周报 ${i.week}`);
   lines.push("");
   lines.push(
-    `${i.weekStartLabel} ~ ${i.weekEndLabel} · 由 SixColor Stats 生成于 ${new Date(
+    `${i.weekStartLabel} ~ ${i.weekEndLabel} · 由 Abacus 生成于 ${new Date(
       i.generatedAt
     ).toLocaleString("zh-CN")}`
   );
@@ -103,7 +103,7 @@ export function buildWeeklyReport(i: WeeklyReportInput): string {
 
   lines.push("---");
   lines.push("");
-  lines.push(`> 账本口径：只计「新增」，删改单列。数据目录 \`.obsidian/plugins/sixcolor-stats/stats/\`。`);
+  lines.push(`> 账本口径：只计「新增」，删改单列。数据目录 \`.obsidian/plugins/abacus/stats/\`。`);
   lines.push("");
 
   return lines.join("\n");

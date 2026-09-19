@@ -1,9 +1,9 @@
 {
-  "id": "sixcolor-stats",
-  "name": "SixColor Stats",
-  "version": "0.6.1",
+  "id": "abacus",
+  "name": "Abacus",
+  "version": "0.7.0",
   "minAppVersion": "1.4.0",
-  "description": "分别统计汉字与英文词，按文件、按天记账。只存事实，不存结论。",
-  "author": "sixcolor",
+  "description": "把写作量当账本记：汉字与英文词分开统计，按文件、按天、按项目。",
+  "author": "imluyg",
   "isDesktopOnly": false
 }

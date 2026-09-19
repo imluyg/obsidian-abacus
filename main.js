@@ -1,5 +1,5 @@
 /*
- * SixColor Stats — 由 build.mjs 从 src/*.ts 生成，请勿直接编辑。
+ * Abacus — 由 build.mjs 从 src/*.ts 生成，请勿直接编辑。
  */
 "use strict";
 var __hostRequire = typeof require === "function" ? require : null;
@@ -121,7 +121,7 @@ const WEEK_CHARS = ["日", "一", "二", "三", "四", "五", "六"];
 const LEDGER_TTL = 3000;
 const TOP_PROJECTS = 6;
 const TOP_REPORT_FILES = 10;
-class SixColorStats extends obsidian_1.Plugin {
+class AbacusPlugin extends obsidian_1.Plugin {
     constructor() {
         super(...arguments);
         this.settings = { ...types_1.DEFAULT_SETTINGS };
@@ -619,7 +619,7 @@ class SixColorStats extends obsidian_1.Plugin {
         return (0, stats_1.isExcludedPath)(path, this.settings);
     }
 }
-exports.default = SixColorStats;
+exports.default = AbacusPlugin;
 
 };
 __modules["report.ts"] = function (module, exports, require) {
@@ -638,7 +638,7 @@ function buildWeeklyReport(i) {
     lines.push("");
     lines.push(`# 周报 ${i.week}`);
     lines.push("");
-    lines.push(`${i.weekStartLabel} ~ ${i.weekEndLabel} · 由 SixColor Stats 生成于 ${new Date(i.generatedAt).toLocaleString("zh-CN")}`);
+    lines.push(`${i.weekStartLabel} ~ ${i.weekEndLabel} · 由 Abacus 生成于 ${new Date(i.generatedAt).toLocaleString("zh-CN")}`);
     lines.push("");
     lines.push("## 总览");
     lines.push("");
@@ -682,7 +682,7 @@ function buildWeeklyReport(i) {
     }
     lines.push("---");
     lines.push("");
-    lines.push(`> 账本口径：只计「新增」，删改单列。数据目录 \`.obsidian/plugins/sixcolor-stats/stats/\`。`);
+    lines.push(`> 账本口径：只计「新增」，删改单列。数据目录 \`.obsidian/plugins/abacus/stats/\`。`);
     lines.push("");
     return lines.join("\n");
 }
@@ -1010,7 +1010,7 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
         containerEl.createEl("h3", { text: "数据" });
         containerEl.createEl("p", {
             cls: "setting-item-description",
-            text: "数据目录：.obsidian/plugins/sixcolor-stats/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
+            text: "数据目录：.obsidian/plugins/abacus/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
         });
         new obsidian_1.Setting(containerEl).setName("立即重建快照").addButton((b) => b.setButtonText("重建").onClick(() => void this.plugin.rebuild()));
         new obsidian_1.Setting(containerEl)
@@ -1611,7 +1611,7 @@ __modules["view.ts"] = function (module, exports, require) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatsView = exports.VIEW_TYPE_STATS = void 0;
 const obsidian_1 = require("obsidian");
-exports.VIEW_TYPE_STATS = "sixcolor-stats-view";
+exports.VIEW_TYPE_STATS = "abacus-view";
 const RANGES = [7, 30];
 const fmt = (n) => Math.round(n).toLocaleString("en-US");
 class StatsView extends obsidian_1.ItemView {

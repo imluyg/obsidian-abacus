@@ -31,7 +31,7 @@ const LEDGER_TTL = 3000;
 const TOP_PROJECTS = 6;
 const TOP_REPORT_FILES = 10;
 
-export default class SixColorStats extends Plugin {
+export default class AbacusPlugin extends Plugin {
   settings: StatsSettings = { ...DEFAULT_SETTINGS };
   store!: StatsStore;
   scanner!: Scanner;

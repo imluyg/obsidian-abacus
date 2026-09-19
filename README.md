@@ -1,4 +1,4 @@
-# SixColor Stats
+# Abacus
 
 Obsidian 字数统计插件。核心原则：**只存事实，不存结论**。
 
@@ -72,10 +72,10 @@ stats/ledger/YYYY-MM.jsonl 流量：逐次追加的事件（永不改写）
 npm install          # 只需要 typescript + obsidian 类型
 node build.mjs       # 类型检查 + 打包 main.js
 node build.mjs --test --vault="E:/path/to/vault"   # 跑测试（含真实库全量扫描）
-node deploy.mjs      # 安装到 .obsidian/plugins/sixcolor-stats
+node deploy.mjs      # 安装到 .obsidian/plugins/abacus
 ```
 
-项目放在 `<库根>/.sixcolor-stats/`，Obsidian 不索引点开头的目录，
+项目放在 `<库根>/.abacus/`，Obsidian 不索引点开头的目录，
 所以 `node_modules` 不会污染关系图和搜索。
 
 打包没用 esbuild：它要 spawn 子进程走管道，在受限环境里会 EPERM。

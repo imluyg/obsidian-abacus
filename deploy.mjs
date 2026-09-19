@@ -3,9 +3,9 @@
  *
  *   node deploy.mjs
  *
- * 项目固定放在 <库根>/.sixcolor-stats（点开头，Obsidian 不会索引，
- * 也不会出现在关系图和搜索结果里）；插件本体装在
- * <库根>/.obsidian/plugins/sixcolor-stats。
+ * 项目固定放在 <库根>/.abacus（点开头，Obsidian 不会索引，
+ * 也不会出现在关系图和搜索结果里）；插件目录由 manifest.json 的 id 决定，
+ * 所以改名只需要改清单，不用改这里。
  *
  * 注意：部署时会去掉 UTF-8 BOM。Obsidian 用 JSON.parse 读 manifest.json，
  * 开头三个字节的 BOM 会让它解析失败，而失败是**静默**的——插件看起来
@@ -17,20 +17,32 @@ import { fileURLToPath } from "node:url";
 
 const project = path.dirname(fileURLToPath(import.meta.url));
 const vault = path.resolve(project, "..");
-const target = path.join(vault, ".obsidian", "plugins", "sixcolor-stats");
 
 if (!fs.existsSync(path.join(vault, ".obsidian"))) {
   console.error(`没找到 Obsidian 配置目录：${path.join(vault, ".obsidian")}`);
-  console.error("请把本项目放在库根目录下的 .sixcolor-stats 里。");
+  console.error(`请把本项目放在库根目录下的 ${path.basename(project)} 里。`);
   process.exit(1);
 }
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+const stripBom = (buf) => (buf.length >= 3 && buf.subarray(0, 3).equals(BOM) ? buf.subarray(3) : buf);
 
-function stripBom(buf) {
-  return buf.length >= 3 && buf.subarray(0, 3).equals(BOM) ? buf.subarray(3) : buf;
+// 先解析清单，顺手拿到 id —— 目标目录名必须和它一致
+let manifest;
+try {
+  manifest = JSON.parse(stripBom(fs.readFileSync(path.join(project, "manifest.json"))).toString("utf8"));
+} catch (err) {
+  console.error(`manifest.json 解析失败：${err.message}`);
+  process.exit(1);
+}
+for (const key of ["id", "name", "version", "minAppVersion"]) {
+  if (!manifest[key]) {
+    console.error(`manifest.json 缺少字段 ${key}`);
+    process.exit(1);
+  }
 }
 
+const target = path.join(vault, ".obsidian", "plugins", manifest.id);
 fs.mkdirSync(target, { recursive: true });
 
 const files = ["main.js", "manifest.json", "styles.css"];
@@ -46,24 +58,6 @@ for (const f of files) {
   const data = stripBom(raw);
   if (data.length !== raw.length) warnings.push(`${f} 带 UTF-8 BOM，已去掉`);
   fs.writeFileSync(path.join(target, f), data);
-}
-
-// 清单自检：能解析、字段齐全，否则 Obsidian 加载不了
-let manifest;
-try {
-  manifest = JSON.parse(stripBom(fs.readFileSync(path.join(target, "manifest.json"))).toString("utf8"));
-} catch (err) {
-  console.error(`manifest.json 解析失败：${err.message}`);
-  process.exit(1);
-}
-for (const key of ["id", "name", "version", "minAppVersion"]) {
-  if (!manifest[key]) {
-    console.error(`manifest.json 缺少字段 ${key}`);
-    process.exit(1);
-  }
-}
-if (manifest.id !== path.basename(target)) {
-  warnings.push(`manifest.id(${manifest.id}) 与目录名(${path.basename(target)}) 不一致`);
 }
 
 console.log(`已安装 ${manifest.name} ${manifest.version} → ${target}`);

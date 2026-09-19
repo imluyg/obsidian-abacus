@@ -144,7 +144,7 @@ export interface FileStatInfo {
 export interface VaultIO {
   listFiles(): FileStatInfo[];
   readFile(path: string): Promise<string>;
-  /** 存放统计数据的适配器（.obsidian/plugins/sixcolor-stats 下） */
+  /** 存放统计数据的适配器（.obsidian/plugins/abacus 下） */
   adapter: StatsAdapter;
 }
 

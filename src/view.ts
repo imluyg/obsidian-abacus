@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import type { Vec } from "./types";
 
-export const VIEW_TYPE_STATS = "sixcolor-stats-view";
+export const VIEW_TYPE_STATS = "abacus-view";
 
 export interface DayBar {
   day: string;

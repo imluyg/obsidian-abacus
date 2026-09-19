@@ -1,6 +1,6 @@
 {
-  "name": "sixcolor-stats",
-  "version": "0.6.1",
+  "name": "abacus",
+  "version": "0.7.0",
   "description": "Obsidian 字数统计插件：双分量计数 + 追加式账本",
   "main": "main.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "wordcount",
     "stats"
   ],
-  "author": "sixcolor",
+  "author": "imluyg",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.14.9",

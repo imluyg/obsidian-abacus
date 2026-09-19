@@ -1,7 +1,7 @@
 {
   "id": "abacus",
   "name": "Abacus",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "minAppVersion": "1.4.0",
   "description": "把写作量当账本记：汉字与英文词分开统计，按文件、按天、按项目。",
   "author": "imluyg",

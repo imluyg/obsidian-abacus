@@ -207,6 +207,16 @@ class AbacusPlugin extends obsidian_1.Plugin {
             callback: () => void this.exportLedger(),
         });
         this.addCommand({
+            id: "year-report",
+            name: "生成年度报告",
+            callback: () => void this.writeYearReport(),
+        });
+        this.addCommand({
+            id: "export-csv",
+            name: "导出账本 CSV",
+            callback: () => void this.exportCsv(),
+        });
+        this.addCommand({
             id: "sync-frontmatter",
             name: "把字数写入当前笔记属性",
             callback: async () => {
@@ -494,6 +504,117 @@ class AbacusPlugin extends obsidian_1.Plugin {
             out.push(...(await this.readMonthCached(ym)));
         return out;
     }
+    async writeYearReport(year = new Date().getFullYear()) {
+        var _a, _b;
+        const from = new Date(year, 0, 1).getTime();
+        const to = new Date(year + 1, 0, 1).getTime();
+        const entries = await this.readMonths((0, stats_1.monthsBetween)(from, to));
+        const rules = (0, stats_1.parseProjectRules)(this.settings.projectRules);
+        const dailyMap = (0, stats_1.byDay)(entries);
+        const daily = {};
+        for (const [k, v] of dailyMap)
+            daily[k] = v;
+        const months = [];
+        for (let m = 0; m < 12; m++) {
+            const mFrom = new Date(year, m, 1).getTime();
+            const mTo = new Date(year, m + 1, 1).getTime();
+            let active = 0;
+            for (let d = 1; d <= 31; d++) {
+                const dt = new Date(year, m, d);
+                if (dt.getMonth() !== m)
+                    break;
+                const v = daily[(0, store_1.dayKey)(dt.getTime())];
+                if (v && v.cjk + v.lat > 0)
+                    active++;
+            }
+            months.push({ month: m + 1, activeDays: active, vec: (0, stats_1.sumWriting)(entries, mFrom, mTo).add });
+        }
+        let activeDays = 0;
+        let longest = 0;
+        let run = 0;
+        let best = null;
+        for (let cursor = new Date(year, 0, 1); cursor.getFullYear() === year; cursor.setDate(cursor.getDate() + 1)) {
+            const key = (0, store_1.dayKey)(cursor.getTime());
+            const v = daily[key];
+            const has = !!v && v.cjk + v.lat > 0;
+            if (has) {
+                activeDays++;
+                run++;
+                if (run > longest)
+                    longest = run;
+            }
+            else {
+                run = 0;
+            }
+            if (v && (!best || v.cjk + v.lat > best.vec.cjk + best.vec.lat))
+                best = { date: key, vec: v };
+        }
+        const projMap = new Map();
+        const fileMap = new Map();
+        for (const e of entries) {
+            if (e.t < from || e.t >= to || !(0, stats_1.isWritingEntry)(e))
+                continue;
+            const v = (0, types_1.vec)(e.add[0], e.add[1]);
+            const p = (0, stats_1.projectOf)(e.p, rules);
+            projMap.set(p, (0, types_1.addVec)((_a = projMap.get(p)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0), v));
+            fileMap.set(e.p, (0, types_1.addVec)((_b = fileMap.get(e.p)) !== null && _b !== void 0 ? _b : (0, types_1.vec)(0, 0), v));
+        }
+        const content = (0, report_1.buildYearReport)({
+            year,
+            add: (0, stats_1.sumWriting)(entries, from, to).add,
+            del: (0, stats_1.sumDeletions)(entries, from, to).del,
+            activeDays,
+            bestDay: best,
+            longestStreak: longest,
+            months,
+            projects: [...projMap.entries()].map(([name, v]) => ({ name, vec: v })).sort((a, b) => b.vec.cjk - a.vec.cjk),
+            topFiles: [...fileMap.entries()]
+                .map(([path, v]) => ({ path, vec: v }))
+                .sort((a, b) => b.vec.cjk - a.vec.cjk)
+                .slice(0, TOP_REPORT_FILES),
+            daily,
+            generatedAt: Date.now(),
+        });
+        const folder = this.settings.reportFolder || "归档/统计归档";
+        const path = (0, obsidian_1.normalizePath)(`${folder}/年度报告 ${year}.md`);
+        try {
+            await this.writeVaultFile(path, content);
+            new obsidian_1.Notice(`年度报告已写入 ${path}`);
+        }
+        catch (err) {
+            new obsidian_1.Notice(`写年度报告失败：${err.message}`);
+        }
+    }
+    async exportCsv() {
+        var _a;
+        const months = await this.store.listLedgerMonths();
+        if (months.length === 0) {
+            new obsidian_1.Notice("账本还是空的，没有可导出的内容。");
+            return;
+        }
+        const entries = await this.store.readMonths(months);
+        const map = new Map();
+        for (const e of entries) {
+            if (e.src !== "edit" && e.src !== "scan")
+                continue;
+            const key = (0, store_1.dayKey)(e.t);
+            const row = (_a = map.get(key)) !== null && _a !== void 0 ? _a : { date: key, add: (0, types_1.vec)(0, 0), del: (0, types_1.vec)(0, 0), entries: 0 };
+            row.add = (0, types_1.addVec)(row.add, (0, types_1.vec)(e.add[0], e.add[1]));
+            row.del = (0, types_1.addVec)(row.del, (0, types_1.vec)(e.del[0], e.del[1]));
+            row.entries++;
+            map.set(key, row);
+        }
+        const rows = [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+        const folder = this.settings.reportFolder || "归档/统计归档";
+        const path = (0, obsidian_1.normalizePath)(`${folder}/账本导出 ${(0, store_1.dayKey)(Date.now())}.csv`);
+        try {
+            await this.writeVaultFile(path, (0, report_1.buildCsv)(rows));
+            new obsidian_1.Notice(`已导出 ${rows.length} 天到 ${path}`);
+        }
+        catch (err) {
+            new obsidian_1.Notice(`导出 CSV 失败：${err.message}`);
+        }
+    }
     queueFrontmatter(path) {
         if (!this.settings.writeFrontmatter)
             return;
@@ -759,6 +880,8 @@ __modules["report.ts"] = function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildWeeklyReport = buildWeeklyReport;
+exports.buildYearReport = buildYearReport;
+exports.buildCsv = buildCsv;
 const n = (v) => Math.round(v).toLocaleString("en-US");
 function buildWeeklyReport(i) {
     const lines = [];
@@ -824,6 +947,122 @@ function buildWeeklyReport(i) {
 function linkFor(path) {
     const clean = path.replace(/\.md$/i, "");
     return `[[${clean}]]`;
+}
+const LEVELS = [0, 200, 500, 1000, 2000];
+function levelOf(v) {
+    const total = v.cjk + v.lat;
+    if (total <= 0)
+        return 0;
+    let lv = 1;
+    for (let i = 1; i < LEVELS.length; i++)
+        if (total >= LEVELS[i])
+            lv = i + 1;
+    return lv;
+}
+function heatmapHtml(daily, year) {
+    const first = new Date(year, 0, 1);
+    const shift = (first.getDay() + 6) % 7;
+    const cursor = new Date(year, 0, 1 - shift);
+    const end = new Date(year, 11, 31);
+    const weeks = [];
+    const cells = Array.from({ length: 7 }, () => []);
+    while (cursor <= end) {
+        const week = [];
+        for (let d = 0; d < 7; d++) {
+            const ts = cursor.getTime();
+            const inYear = cursor.getFullYear() === year;
+            const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+            const v = inYear ? daily[key] : undefined;
+            const lv = v ? levelOf(v) : -1;
+            if (lv < 0) {
+                week.push('<div style="width:11px;height:11px"></div>');
+            }
+            else {
+                const opacity = [0.08, 0.28, 0.5, 0.72, 1][lv];
+                const tip = v ? `${key}　汉字 ${v.cjk}　英文词 ${v.lat}` : `${key}　无记录`;
+                week.push(`<div title="${tip}" style="width:11px;height:11px;border-radius:2px;background:var(--interactive-accent);opacity:${opacity}"></div>`);
+            }
+            cursor.setDate(cursor.getDate() + 1);
+        }
+        weeks.push(`<div style="display:flex;flex-direction:column;gap:3px">${week.join("")}</div>`);
+    }
+    return [
+        '<div style="display:flex;gap:3px;overflow-x:auto;padding:6px 0">',
+        weeks.join(""),
+        "</div>",
+        '<div style="color:var(--text-faint);font-size:0.8em">单元格悬停看当天数字；颜色越深写得越多。</div>',
+    ].join("\n");
+}
+function buildYearReport(i) {
+    const lines = [];
+    const perDay = i.activeDays > 0 ? Math.round(i.add.cjk / i.activeDays) : 0;
+    lines.push("---");
+    lines.push("tags:");
+    lines.push("  - 统计");
+    lines.push("  - 年度报告");
+    lines.push(`year: ${i.year}`);
+    lines.push("---");
+    lines.push("");
+    lines.push(`# ${i.year} 年度报告`);
+    lines.push("");
+    lines.push(`由 Abacus 生成于 ${new Date(i.generatedAt).toLocaleString("zh-CN")}`);
+    lines.push("");
+    lines.push("## 总览");
+    lines.push("");
+    lines.push("| 指标 | 汉字 | 英文词 |");
+    lines.push("| --- | ---: | ---: |");
+    lines.push(`| 全年新增 | ${n(i.add.cjk)} | ${n(i.add.lat)} |`);
+    lines.push(`| 全年删改 | −${n(i.del.cjk)} | −${n(i.del.lat)} |`);
+    lines.push(`| 净增长 | ${n(i.add.cjk - i.del.cjk)} | ${n(i.add.lat - i.del.lat)} |`);
+    lines.push(`| 活跃天数 | ${i.activeDays} / 365 | |`);
+    lines.push(`| 写作日均 | ${n(perDay)} 汉字 | |`);
+    lines.push(`| 最长连续 | ${i.longestStreak} 天 | |`);
+    if (i.bestDay) {
+        lines.push(`| 最高产一天 | ${i.bestDay.date}（${n(i.bestDay.vec.cjk)} 汉字） | |`);
+    }
+    lines.push("");
+    lines.push("## 热力图");
+    lines.push("");
+    lines.push(heatmapHtml(i.daily, i.year));
+    lines.push("");
+    lines.push("## 逐月");
+    lines.push("");
+    lines.push("| 月份 | 汉字 | 英文词 | 活跃天数 |");
+    lines.push("| --- | ---: | ---: | ---: |");
+    for (const m of i.months) {
+        lines.push(`| ${m.month} 月 | ${n(m.vec.cjk)} | ${n(m.vec.lat)} | ${m.activeDays} |`);
+    }
+    lines.push("");
+    if (i.projects.length > 0) {
+        lines.push("## 项目");
+        lines.push("");
+        lines.push("| 项目 | 汉字 | 英文词 |");
+        lines.push("| --- | ---: | ---: |");
+        for (const p of i.projects)
+            lines.push(`| ${p.name} | ${n(p.vec.cjk)} | ${n(p.vec.lat)} |`);
+        lines.push("");
+    }
+    if (i.topFiles.length > 0) {
+        lines.push("## 改动最多的文件");
+        lines.push("");
+        lines.push("| 文件 | 汉字 | 英文词 |");
+        lines.push("| --- | ---: | ---: |");
+        for (const f of i.topFiles)
+            lines.push(`| ${linkFor(f.path)} | ${n(f.vec.cjk)} | ${n(f.vec.lat)} |`);
+        lines.push("");
+    }
+    lines.push("---");
+    lines.push("");
+    lines.push("> 只计「新增」，删改单列。账本是唯一数据源，这份报告可以随时重新生成。");
+    lines.push("");
+    return lines.join("\n");
+}
+function buildCsv(rows) {
+    const out = ["日期,汉字新增,英文词新增,汉字删改,英文词删改,事件数"];
+    for (const r of rows) {
+        out.push(`${r.date},${r.add.cjk},${r.add.lat},${r.del.cjk},${r.del.lat},${r.entries}`);
+    }
+    return out.join("\n") + "\n";
 }
 
 };
@@ -1183,6 +1422,14 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
             s.reportFolder = v.trim() || "归档/统计归档";
             await this.plugin.applySettings(["scan"]);
         }));
+        new obsidian_1.Setting(containerEl)
+            .setName("生成年度报告")
+            .setDesc("含热力图、逐月、项目与文件排行，写入同目录的 `年度报告 YYYY.md`。")
+            .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeYearReport()));
+        new obsidian_1.Setting(containerEl)
+            .setName("导出账本 CSV")
+            .setDesc("按天汇总成 CSV，方便在 Excel 或脚本里再分析。")
+            .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportCsv()));
         new obsidian_1.Setting(containerEl)
             .setName("生成本周周报")
             .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")

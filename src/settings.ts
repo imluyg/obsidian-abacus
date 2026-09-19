@@ -178,6 +178,16 @@ export class StatsSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("生成年度报告")
+      .setDesc("含热力图、逐月、项目与文件排行，写入同目录的 `年度报告 YYYY.md`。")
+      .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeYearReport()));
+
+    new Setting(containerEl)
+      .setName("导出账本 CSV")
+      .setDesc("按天汇总成 CSV，方便在 Excel 或脚本里再分析。")
+      .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportCsv()));
+
+    new Setting(containerEl)
       .setName("生成本周周报")
       .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")
       .addButton((b) =>

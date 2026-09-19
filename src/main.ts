@@ -24,7 +24,16 @@ import {
   sumWriting,
   weekdayCN,
 } from "./stats";
-import { buildWeeklyReport, type ReportDaily, type ReportProject, type ReportFile } from "./report";
+import {
+  buildCsv,
+  buildWeeklyReport,
+  buildYearReport,
+  type CsvRow,
+  type ReportDaily,
+  type ReportProject,
+  type ReportFile,
+  type YearMonthRow,
+} from "./report";
 
 const WEEK_CHARS = ["日", "一", "二", "三", "四", "五", "六"];
 const DEVICE_KEY = "abacus-device-id";
@@ -133,6 +142,16 @@ export default class AbacusPlugin extends Plugin {
       id: "export-ledger",
       name: "导出账本备份",
       callback: () => void this.exportLedger(),
+    });
+    this.addCommand({
+      id: "year-report",
+      name: "生成年度报告",
+      callback: () => void this.writeYearReport(),
+    });
+    this.addCommand({
+      id: "export-csv",
+      name: "导出账本 CSV",
+      callback: () => void this.exportCsv(),
     });
     this.addCommand({
       id: "sync-frontmatter",
@@ -450,6 +469,122 @@ export default class AbacusPlugin extends Plugin {
     const out: LedgerEntry[] = [];
     for (const ym of yms) out.push(...(await this.readMonthCached(ym)));
     return out;
+  }
+
+  /* ---------------------------- 年度报告 ---------------------------- */
+
+  async writeYearReport(year = new Date().getFullYear()): Promise<void> {
+    const from = new Date(year, 0, 1).getTime();
+    const to = new Date(year + 1, 0, 1).getTime();
+    const entries = await this.readMonths(monthsBetween(from, to));
+    const rules = parseProjectRules(this.settings.projectRules);
+
+    const dailyMap = byDay(entries);
+    const daily: Record<string, Vec> = {};
+    for (const [k, v] of dailyMap) daily[k] = v;
+
+    // 逐月
+    const months: YearMonthRow[] = [];
+    for (let m = 0; m < 12; m++) {
+      const mFrom = new Date(year, m, 1).getTime();
+      const mTo = new Date(year, m + 1, 1).getTime();
+      let active = 0;
+      for (let d = 1; d <= 31; d++) {
+        const dt = new Date(year, m, d);
+        if (dt.getMonth() !== m) break;
+        const v = daily[dayKey(dt.getTime())];
+        if (v && v.cjk + v.lat > 0) active++;
+      }
+      months.push({ month: m + 1, activeDays: active, vec: sumWriting(entries, mFrom, mTo).add });
+    }
+
+    // 活跃天数、最长连续、最高产
+    let activeDays = 0;
+    let longest = 0;
+    let run = 0;
+    let best: { date: string; vec: Vec } | null = null;
+    for (let cursor = new Date(year, 0, 1); cursor.getFullYear() === year; cursor.setDate(cursor.getDate() + 1)) {
+      const key = dayKey(cursor.getTime());
+      const v = daily[key];
+      const has = !!v && v.cjk + v.lat > 0;
+      if (has) {
+        activeDays++;
+        run++;
+        if (run > longest) longest = run;
+      } else {
+        run = 0;
+      }
+      if (v && (!best || v.cjk + v.lat > best.vec.cjk + best.vec.lat)) best = { date: key, vec: v };
+    }
+
+    // 项目与文件
+    const projMap = new Map<string, Vec>();
+    const fileMap = new Map<string, Vec>();
+    for (const e of entries) {
+      if (e.t < from || e.t >= to || !isWritingEntry(e)) continue;
+      const v = vec(e.add[0], e.add[1]);
+      const p = projectOf(e.p, rules);
+      projMap.set(p, addVec(projMap.get(p) ?? vec(0, 0), v));
+      fileMap.set(e.p, addVec(fileMap.get(e.p) ?? vec(0, 0), v));
+    }
+
+    const content = buildYearReport({
+      year,
+      add: sumWriting(entries, from, to).add,
+      del: sumDeletions(entries, from, to).del,
+      activeDays,
+      bestDay: best,
+      longestStreak: longest,
+      months,
+      projects: [...projMap.entries()].map(([name, v]) => ({ name, vec: v })).sort((a, b) => b.vec.cjk - a.vec.cjk),
+      topFiles: [...fileMap.entries()]
+        .map(([path, v]) => ({ path, vec: v }))
+        .sort((a, b) => b.vec.cjk - a.vec.cjk)
+        .slice(0, TOP_REPORT_FILES),
+      daily,
+      generatedAt: Date.now(),
+    });
+
+    const folder = this.settings.reportFolder || "归档/统计归档";
+    const path = normalizePath(`${folder}/年度报告 ${year}.md`);
+    try {
+      await this.writeVaultFile(path, content);
+      new Notice(`年度报告已写入 ${path}`);
+    } catch (err) {
+      new Notice(`写年度报告失败：${(err as Error).message}`);
+    }
+  }
+
+  /* ------------------------------ CSV ------------------------------ */
+
+  async exportCsv(): Promise<void> {
+    const months = await this.store.listLedgerMonths();
+    if (months.length === 0) {
+      new Notice("账本还是空的，没有可导出的内容。");
+      return;
+    }
+    const entries = await this.store.readMonths(months);
+
+    const map = new Map<string, CsvRow>();
+    for (const e of entries) {
+      if (e.src !== "edit" && e.src !== "scan") continue;
+      const key = dayKey(e.t);
+      const row = map.get(key) ?? { date: key, add: vec(0, 0), del: vec(0, 0), entries: 0 };
+      row.add = addVec(row.add, vec(e.add[0], e.add[1]));
+      row.del = addVec(row.del, vec(e.del[0], e.del[1]));
+      row.entries++;
+      map.set(key, row);
+    }
+
+    const rows = [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+    const folder = this.settings.reportFolder || "归档/统计归档";
+    const path = normalizePath(`${folder}/账本导出 ${dayKey(Date.now())}.csv`);
+    try {
+      await this.writeVaultFile(path, buildCsv(rows));
+      new Notice(`已导出 ${rows.length} 天到 ${path}`);
+    } catch (err) {
+      new Notice(`导出 CSV 失败：${(err as Error).message}`);
+    }
   }
 
   /* ---------------------------- 笔记属性 ---------------------------- */

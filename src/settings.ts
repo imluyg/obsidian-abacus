@@ -147,7 +147,7 @@ export class StatsSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("分组规则")
       .addTextArea((t) => {
-        t.setPlaceholder("小说1 = 创作/小说/1\n殷浩天 = 创作/殷浩天");
+        t.setPlaceholder("小说1 = 创作/小说/1\n设定集 = 创作/设定集");
         t.setValue(s.projectRules.join("\n"));
         t.inputEl.rows = 5;
         t.inputEl.addClass("scs-textarea");

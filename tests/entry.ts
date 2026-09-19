@@ -184,7 +184,7 @@ async function testLedgerFlow(): Promise<void> {
   await store2.load();
   check("重启后快照条数", store2.size(), 1);
   check("重启后总计", store2.total().cjk, 14);
-  const raw = fs.readFileSync(path.join(data, "stats", "ledger", `${monthNow()}.jsonl`), "utf8");
+  const raw = fs.readFileSync(path.join(data, "stats", "ledger", `${monthNow()}.local.jsonl`), "utf8");
   check("账本是合法 JSONL", parseLedger(raw).length, afterDelete.length);
   check("账本月份可枚举", await store2.listLedgerMonths(), [monthNow()]);
 
@@ -275,13 +275,35 @@ async function testLedgerIntegrity(): Promise<void> {
   check("追加后两条都在", (await st3.readMonth(monthNow())).length, 2);
 
   // 外部把末尾写坏：大小对不上，必须退回安全路径
-  await fs.promises.appendFile(path.join(dir, "stats", "ledger", `${monthNow()}.jsonl`), '{"t":9,"p":"bad', "utf8");
+  await fs.promises.appendFile(path.join(dir, "stats", "ledger", `${monthNow()}.local.jsonl`), '{"t":9,"p":"bad', "utf8");
   await st3.append([ev(2, "c.md")]);
   check("外部改动后不再追加", appends, 1);
   check("外部改动后整写", writes, 2);
   check("坏尾被修掉", st3.repairs.length, 1);
   check("修复后三条有效", (await st3.readMonth(monthNow())).length, 3);
   fs.rmSync(dir, { recursive: true, force: true });
+
+  // 两台设备写同一个月：各写各的文件，读取时合并
+  const dir2 = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-multi-"));
+  const ad2 = new FsAdapter(dir2);
+  const devA = new StatsStore("", ad2, { deviceId: "devA" });
+  const devB = new StatsStore("", ad2, { deviceId: "devB" });
+  await devA.append([ev(10, "a1.md")]);
+  await devB.append([ev(11, "b1.md")]);
+  const names = (await fs.promises.readdir(path.join(dir2, "stats", "ledger"))).sort();
+  check("两台设备各自成文件", names.length, 2);
+  check("文件名带设备标识", names.every((n) => n.includes(".devA.") || n.includes(".devB.")), true);
+  check("读取时合并两个文件", (await devA.readMonth(monthNow())).length, 2);
+  check("另一端也能读到合并结果", (await devB.readMonth(monthNow())).length, 2);
+
+  // 老版本的无后缀文件必须继续可读（不迁移、不丢失）
+  await fs.promises.writeFile(
+    path.join(dir2, "stats", "ledger", `${monthNow()}.jsonl`),
+    JSON.stringify({ t: nowTs + 12, p: "legacy.md", add: [3, 0], del: [0, 0], src: "edit" }) + "\n",
+    "utf8"
+  );
+  check("兼容老的无后缀文件", (await devA.readMonth(monthNow())).length, 3);
+  fs.rmSync(dir2, { recursive: true, force: true });
 }
 
 async function testRealVault(vaultRoot: string): Promise<void> {

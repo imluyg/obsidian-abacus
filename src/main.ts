@@ -27,6 +27,25 @@ import {
 import { buildWeeklyReport, type ReportDaily, type ReportProject, type ReportFile } from "./report";
 
 const WEEK_CHARS = ["日", "一", "二", "三", "四", "五", "六"];
+const DEVICE_KEY = "abacus-device-id";
+
+/**
+ * 设备标识，用在账本文件名里。
+ * 故意放 localStorage 而不是 data.json：data.json 会跟着同步走，
+ * 那样每台设备拿到的都是同一个 id，分文件就失去意义了。
+ */
+function deviceId(): string {
+  try {
+    let id = window.localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = Math.random().toString(36).slice(2, 10);
+      window.localStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return "local";
+  }
+}
 const LEDGER_TTL = 3000;
 const TOP_PROJECTS = 6;
 const TOP_REPORT_FILES = 10;
@@ -48,7 +67,7 @@ export default class AbacusPlugin extends Plugin {
 
     const baseDir = this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`;
     const adapter = this.app.vault.adapter as unknown as StatsAdapter;
-    this.store = new StatsStore(baseDir, adapter, 1);
+    this.store = new StatsStore(baseDir, adapter, { version: 1, deviceId: deviceId() });
     await this.store.load();
 
     const io: VaultIO = {

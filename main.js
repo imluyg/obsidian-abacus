@@ -118,6 +118,20 @@ const stats_1 = require("./stats");
 Object.defineProperty(exports, "fmtDate", { enumerable: true, get: function () { return stats_1.fmtDate; } });
 const report_1 = require("./report");
 const WEEK_CHARS = ["日", "一", "二", "三", "四", "五", "六"];
+const DEVICE_KEY = "abacus-device-id";
+function deviceId() {
+    try {
+        let id = window.localStorage.getItem(DEVICE_KEY);
+        if (!id) {
+            id = Math.random().toString(36).slice(2, 10);
+            window.localStorage.setItem(DEVICE_KEY, id);
+        }
+        return id;
+    }
+    catch (_a) {
+        return "local";
+    }
+}
 const LEDGER_TTL = 3000;
 const TOP_PROJECTS = 6;
 const TOP_REPORT_FILES = 10;
@@ -136,7 +150,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         await this.loadSettings();
         const baseDir = (_a = this.manifest.dir) !== null && _a !== void 0 ? _a : `.obsidian/plugins/${this.manifest.id}`;
         const adapter = this.app.vault.adapter;
-        this.store = new store_1.StatsStore(baseDir, adapter, 1);
+        this.store = new store_1.StatsStore(baseDir, adapter, { version: 1, deviceId: deviceId() });
         await this.store.load();
         const io = {
             listFiles: () => this.app.vault.getMarkdownFiles().map((f) => ({
@@ -1254,15 +1268,22 @@ Object.defineProperty(exports, "ZERO", { enumerable: true, get: function () { re
 const SNAPSHOT_REL = "stats/snapshot.json";
 const LEDGER_REL = "stats/ledger";
 class StatsStore {
-    constructor(baseDir, adapter, snapshotVersion = 1) {
+    constructor(baseDir, adapter, opts = {}) {
         this.baseDir = baseDir;
         this.adapter = adapter;
-        this.snapshotVersion = snapshotVersion;
+        this.opts = opts;
         this.records = new Map();
         this.loaded = false;
         this.saveTimer = null;
         this.lastSize = new Map();
         this.repairs = [];
+    }
+    get snapshotVersion() {
+        var _a;
+        return (_a = this.opts.version) !== null && _a !== void 0 ? _a : 1;
+    }
+    get deviceId() {
+        return this.opts.deviceId || "local";
     }
     get isLoaded() {
         return this.loaded;
@@ -1404,13 +1425,18 @@ class StatsStore {
             this.lastSize.set(full, st.size);
     }
     async readMonth(ym) {
-        try {
-            const raw = await this.adapter.read(this.path(this.ledgerPath(ym)));
-            return parseLedger(raw);
-        }
-        catch (_a) {
+        const files = await this.listMonthFiles(ym);
+        if (files.length === 0)
             return [];
+        const out = [];
+        for (const name of files) {
+            try {
+                out.push(...parseLedger(await this.adapter.read(this.path(`${LEDGER_REL}/${name}`))));
+            }
+            catch (_a) {
+            }
         }
+        return out;
     }
     async readMonths(yms) {
         const out = [];
@@ -1418,18 +1444,27 @@ class StatsStore {
             out.push(...(await this.readMonth(ym)));
         return out;
     }
-    async listLedgerMonths() {
+    async listMonthFiles(ym) {
+        const re = new RegExp(`^${ym}(\\..+)?\\.jsonl$`);
+        return (await this.listLedgerFiles()).filter((f) => re.test(f));
+    }
+    async listLedgerFiles() {
         try {
             const res = await this.adapter.list(this.path(LEDGER_REL));
             return res.files
                 .map((f) => { var _a; return (_a = f.split("/").pop()) !== null && _a !== void 0 ? _a : ""; })
-                .filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f))
-                .map((f) => f.replace(/\.jsonl$/, ""))
+                .filter((f) => /^\d{4}-\d{2}(\..+)?\.jsonl$/.test(f))
                 .sort();
         }
         catch (_a) {
             return [];
         }
+    }
+    async listLedgerMonths() {
+        const set = new Set();
+        for (const f of await this.listLedgerFiles())
+            set.add(f.slice(0, 7));
+        return [...set].sort();
     }
     async audit(months) {
         const list = months !== null && months !== void 0 ? months : (await this.listLedgerMonths());
@@ -1447,30 +1482,32 @@ class StatsStore {
             problems: [],
         };
         for (const ym of list) {
-            let raw = "";
-            try {
-                raw = await this.adapter.read(this.path(this.ledgerPath(ym)));
-            }
-            catch (_a) {
-                continue;
-            }
-            if (raw.length > 0 && !raw.endsWith("\n"))
-                result.truncated.push(ym);
-            const parsed = parseLedgerReport(raw);
-            result.badLines += parsed.bad;
-            result.totalEntries += parsed.entries.length;
-            for (const e of parsed.entries) {
-                const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
-                if (seen.has(key))
-                    result.duplicates++;
-                else
-                    seen.add(key);
-                if (e.t > now + 3600000)
-                    result.future++;
-                if (result.first === null || e.t < result.first)
-                    result.first = e.t;
-                if (result.last === null || e.t > result.last)
-                    result.last = e.t;
+            for (const name of await this.listMonthFiles(ym)) {
+                let raw = "";
+                try {
+                    raw = await this.adapter.read(this.path(`${LEDGER_REL}/${name}`));
+                }
+                catch (_a) {
+                    continue;
+                }
+                if (raw.length > 0 && !raw.endsWith("\n"))
+                    result.truncated.push(name);
+                const parsed = parseLedgerReport(raw);
+                result.badLines += parsed.bad;
+                result.totalEntries += parsed.entries.length;
+                for (const e of parsed.entries) {
+                    const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
+                    if (seen.has(key))
+                        result.duplicates++;
+                    else
+                        seen.add(key);
+                    if (e.t > now + 3600000)
+                        result.future++;
+                    if (result.first === null || e.t < result.first)
+                        result.first = e.t;
+                    if (result.last === null || e.t > result.last)
+                        result.last = e.t;
+                }
             }
         }
         if (result.badLines > 0)
@@ -1489,7 +1526,7 @@ class StatsStore {
         return base ? `${base}/${rel}` : rel;
     }
     ledgerPath(ym) {
-        return `${LEDGER_REL}/${ym}.jsonl`;
+        return `${LEDGER_REL}/${ym}.${this.deviceId}.jsonl`;
     }
     async ensureDir(rel) {
         const p = this.path(rel);

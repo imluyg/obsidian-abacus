@@ -28,8 +28,23 @@ export class StatsStore {
   constructor(
     private baseDir: string,
     private adapter: StatsAdapter,
-    private snapshotVersion = 1
+    private opts: { version?: number; deviceId?: string } = {}
   ) {}
+
+  private get snapshotVersion(): number {
+    return this.opts.version ?? 1;
+  }
+
+  /**
+   * 设备标识，写进账本文件名。
+   *
+   * 为什么按设备分文件：多台设备同写一个月时，单文件会被后同步的那份整个覆盖，
+   * 丢的是另一台设备的全部记录，而且没有任何提示。分文件后最坏情况是
+   * 「两个文件并存」，读的时候合并即可，冲突从「丢数据」降级成「多一份文件」。
+   */
+  private get deviceId(): string {
+    return this.opts.deviceId || "local";
+  }
 
   private saveTimer: number | null = null;
   /** 账本文件上次写完后的大小，用来判断能否直接追加 */
@@ -192,14 +207,19 @@ export class StatsStore {
     if (st) this.lastSize.set(full, st.size);
   }
 
-  /** 读某个月的全部事件；文件不存在返回空 */
+  /** 读某个月的全部事件：可能有多台设备写的多个文件 */
   async readMonth(ym: string): Promise<LedgerEntry[]> {
-    try {
-      const raw = await this.adapter.read(this.path(this.ledgerPath(ym)));
-      return parseLedger(raw);
-    } catch {
-      return [];
+    const files = await this.listMonthFiles(ym);
+    if (files.length === 0) return [];
+    const out: LedgerEntry[] = [];
+    for (const name of files) {
+      try {
+        out.push(...parseLedger(await this.adapter.read(this.path(`${LEDGER_REL}/${name}`))));
+      } catch {
+        // 单个文件读不了就跳过，别的设备那份还在
+      }
     }
+    return out;
   }
 
   async readMonths(yms: string[]): Promise<LedgerEntry[]> {
@@ -208,18 +228,29 @@ export class StatsStore {
     return out;
   }
 
-  /** 账本里已有的月份，升序 */
-  async listLedgerMonths(): Promise<string[]> {
+  /** 某个月的所有账本文件名（含老版本没有设备后缀的） */
+  private async listMonthFiles(ym: string): Promise<string[]> {
+    const re = new RegExp(`^${ym}(\\..+)?\\.jsonl$`);
+    return (await this.listLedgerFiles()).filter((f) => re.test(f));
+  }
+
+  private async listLedgerFiles(): Promise<string[]> {
     try {
       const res = await this.adapter.list(this.path(LEDGER_REL));
       return res.files
         .map((f) => f.split("/").pop() ?? "")
-        .filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f))
-        .map((f) => f.replace(/\.jsonl$/, ""))
+        .filter((f) => /^\d{4}-\d{2}(\..+)?\.jsonl$/.test(f))
         .sort();
     } catch {
       return [];
     }
+  }
+
+  /** 账本里已有的月份，升序 */
+  async listLedgerMonths(): Promise<string[]> {
+    const set = new Set<string>();
+    for (const f of await this.listLedgerFiles()) set.add(f.slice(0, 7));
+    return [...set].sort();
   }
 
   /* ------------------------------ 工具 ------------------------------ */
@@ -248,23 +279,25 @@ export class StatsStore {
     };
 
     for (const ym of list) {
-      let raw = "";
-      try {
-        raw = await this.adapter.read(this.path(this.ledgerPath(ym)));
-      } catch {
-        continue;
-      }
-      if (raw.length > 0 && !raw.endsWith("\n")) result.truncated.push(ym);
-      const parsed = parseLedgerReport(raw);
-      result.badLines += parsed.bad;
-      result.totalEntries += parsed.entries.length;
-      for (const e of parsed.entries) {
-        const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
-        if (seen.has(key)) result.duplicates++;
-        else seen.add(key);
-        if (e.t > now + 3_600_000) result.future++;
-        if (result.first === null || e.t < result.first) result.first = e.t;
-        if (result.last === null || e.t > result.last) result.last = e.t;
+      for (const name of await this.listMonthFiles(ym)) {
+        let raw = "";
+        try {
+          raw = await this.adapter.read(this.path(`${LEDGER_REL}/${name}`));
+        } catch {
+          continue;
+        }
+        if (raw.length > 0 && !raw.endsWith("\n")) result.truncated.push(name);
+        const parsed = parseLedgerReport(raw);
+        result.badLines += parsed.bad;
+        result.totalEntries += parsed.entries.length;
+        for (const e of parsed.entries) {
+          const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
+          if (seen.has(key)) result.duplicates++;
+          else seen.add(key);
+          if (e.t > now + 3_600_000) result.future++;
+          if (result.first === null || e.t < result.first) result.first = e.t;
+          if (result.last === null || e.t > result.last) result.last = e.t;
+        }
       }
     }
 
@@ -283,7 +316,7 @@ export class StatsStore {
   }
 
   private ledgerPath(ym: string): string {
-    return `${LEDGER_REL}/${ym}.jsonl`;
+    return `${LEDGER_REL}/${ym}.${this.deviceId}.jsonl`;
   }
 
   private async ensureDir(rel: string): Promise<void> {

@@ -32,6 +32,8 @@ export class StatsStore {
   ) {}
 
   private saveTimer: number | null = null;
+  /** 账本文件上次写完后的大小，用来判断能否直接追加 */
+  private lastSize = new Map<string, number>();
 
   get isLoaded(): boolean {
     return this.loaded;
@@ -113,10 +115,11 @@ export class StatsStore {
   }
 
   /**
-   * 快照写盘很贵（上千条记录），编辑时不要每次都写。
-   * 攒 4 秒，崩溃最多丢掉这 4 秒的“存量”，账本不受影响。
+   * 快照写盘很贵，而且它随时可以由全量扫描重建——
+   * 所以不必追着每一次编辑写。攒 30 秒，崩溃最多丢这点“存量”，
+   * 账本（真正不可重建的部分）是立即写盘的。
    */
-  scheduleSave(delay = 4000): void {
+  scheduleSave(delay = 30000): void {
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
@@ -148,17 +151,45 @@ export class StatsStore {
     await this.ensureDir("stats");
     await this.ensureDir(LEDGER_REL);
     for (const [ym, lines] of byMonth) {
-      const rel = this.ledgerPath(ym);
+      const full = this.path(this.ledgerPath(ym));
+      const payload = lines.join("\n") + "\n";
+
+      if (await this.tryFastAppend(full, payload)) continue;
+
+      // 安全路径：读全文、修尾、整写
       let prev = "";
       try {
-        prev = await this.adapter.read(this.path(rel));
+        prev = await this.adapter.read(full);
       } catch {
         prev = "";
       }
       const { text, dropped } = repairTail(prev);
       if (dropped > 0) this.repairs.push({ ym, dropped });
-      await this.adapter.write(this.path(rel), text + lines.join("\n") + "\n");
+      await this.adapter.write(full, text + payload);
+      await this.rememberSize(full);
     }
+  }
+
+  /**
+   * 快路径：文件大小与上次写完后一致，说明没被外部改动过，
+   * 直接追加。这样每次编辑写的是几十字节，而不是整个月账本。
+   * 大小对不上（同步、手改、截断）就退回安全路径。
+   */
+  private async tryFastAppend(full: string, payload: string): Promise<boolean> {
+    if (!this.adapter.append || !this.adapter.stat) return false;
+    const expected = this.lastSize.get(full);
+    if (expected === undefined) return false;
+    const st = await this.adapter.stat(full);
+    if (!st || st.size !== expected) return false;
+    await this.adapter.append(full, payload);
+    await this.rememberSize(full);
+    return true;
+  }
+
+  private async rememberSize(full: string): Promise<void> {
+    if (!this.adapter.stat) return;
+    const st = await this.adapter.stat(full);
+    if (st) this.lastSize.set(full, st.size);
   }
 
   /** 读某个月的全部事件；文件不存在返回空 */

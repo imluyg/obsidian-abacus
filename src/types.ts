@@ -154,4 +154,8 @@ export interface StatsAdapter {
   exists(p: string): Promise<boolean>;
   mkdir(p: string): Promise<void>;
   list(p: string): Promise<{ files: string[]; folders: string[] }>;
+  /** 追加写。Obsidian 的 DataAdapter 有，测试适配器可选实现 */
+  append?(p: string, d: string): Promise<void>;
+  /** 文件大小，用于判断账本是否被外部改动过 */
+  stat?(p: string): Promise<{ size: number } | null>;
 }

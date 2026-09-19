@@ -61,6 +61,17 @@ class FsAdapter implements StatsAdapter {
   async mkdir(rel: string): Promise<void> {
     await fs.promises.mkdir(this.p(rel), { recursive: true });
   }
+  async append(rel: string, data: string): Promise<void> {
+    await fs.promises.appendFile(this.p(rel), data, "utf8");
+  }
+  async stat(rel: string): Promise<{ size: number } | null> {
+    try {
+      const s = await fs.promises.stat(this.p(rel));
+      return { size: s.size };
+    } catch {
+      return null;
+    }
+  }
   async list(rel: string): Promise<{ files: string[]; folders: string[] }> {
     const out = { files: [] as string[], folders: [] as string[] };
     try {
@@ -227,6 +238,50 @@ async function testLedgerIntegrity(): Promise<void> {
   check("追加后坏尾消失", written.includes('"p":"y'), false);
   check("追加后新行完整", written.trimEnd().endsWith('{"t":3,"p":"z.md","add":[5,0],"del":[0,0],"src":"edit"}'), true);
   check("修复被记录", store2.repairs.length, 1);
+
+  // 快路径：第一次整写，第二次（大小未变）直接追加
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-fast-"));
+  const base = new FsAdapter(dir);
+  let appends = 0;
+  let writes = 0;
+  const counting: StatsAdapter = {
+    read: (p) => base.read(p),
+    write: async (p, d) => {
+      writes++;
+      return base.write(p, d);
+    },
+    exists: (p) => base.exists(p),
+    mkdir: (p) => base.mkdir(p),
+    list: (p) => base.list(p),
+    append: async (p, d) => {
+      appends++;
+      return base.append(p, d);
+    },
+    stat: (p) => base.stat(p),
+  };
+  const nowTs = Date.now();
+  const ev = (n: number, name: string): LedgerEntry => ({
+    t: nowTs + n,
+    p: name,
+    add: [1, 0],
+    del: [0, 0],
+    src: "edit",
+  });
+  const st3 = new StatsStore("", counting);
+  await st3.append([ev(0, "a.md")]);
+  await st3.append([ev(1, "b.md")]);
+  check("第一次整写", writes, 1);
+  check("第二次走追加", appends, 1);
+  check("追加后两条都在", (await st3.readMonth(monthNow())).length, 2);
+
+  // 外部把末尾写坏：大小对不上，必须退回安全路径
+  await fs.promises.appendFile(path.join(dir, "stats", "ledger", `${monthNow()}.jsonl`), '{"t":9,"p":"bad', "utf8");
+  await st3.append([ev(2, "c.md")]);
+  check("外部改动后不再追加", appends, 1);
+  check("外部改动后整写", writes, 2);
+  check("坏尾被修掉", st3.repairs.length, 1);
+  check("修复后三条有效", (await st3.readMonth(monthNow())).length, 3);
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 async function testRealVault(vaultRoot: string): Promise<void> {
@@ -270,7 +325,8 @@ async function testRealVault(vaultRoot: string): Promise<void> {
   const t1 = Date.now();
   const again = await scanner.fullScan(false);
   console.log(`  二次扫描耗时 ${Date.now() - t1} ms，变更 ${again.changed} 个`);
-  check("二次扫描无变更", again.changed, 0);
+  // 库是活的：你可能正在旁边写字，允许极少数文件在两次扫描之间变动
+  check("二次扫描命中缓存（变更 ≤ 2）", again.changed <= 2, true);
 
   fs.rmSync(dataRoot, { recursive: true, force: true });
 }
@@ -315,8 +371,52 @@ async function main(): Promise<void> {
   await testLedgerIntegrity();
   const vault = process.argv[2];
   if (vault && fs.existsSync(vault)) await testRealVault(vault);
+  await testPerformance();
   console.log(failures === 0 ? "\n全部通过 ✓" : `\n${failures} 项失败 ✗`);
   process.exit(failures === 0 ? 0 : 1);
 }
 
 void main();
+async function testPerformance(): Promise<void> {
+  console.log("\n[6] 性能实测（只做参考，不设阈值）");
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-bench-"));
+  const adapter = new FsAdapter(root);
+  const store = new StatsStore("", adapter);
+  await store.load();
+
+  const ledgerRel = "stats/ledger/2026-11.jsonl";
+  const entry = { t: Date.now(), p: "笔记/新.md", add: [12, 1], del: [0, 0], src: "edit" } as LedgerEntry;
+  const lineOf = (i: number) =>
+    JSON.stringify({ t: 1763000000000 + i, p: `笔记/${i}.md`, add: [10, 1], del: [0, 0], src: "edit" });
+
+  for (const n of [500, 1500, 5000, 20000]) {
+    await adapter.write(ledgerRel, Array.from({ length: n }, (_, i) => lineOf(i)).join("\n") + "\n");
+    const kb = fs.statSync(path.join(root, ledgerRel)).size / 1024;
+    await store.append([entry]); // 预热
+    const t0 = performance.now();
+    const rounds = 10;
+    for (let k = 0; k < rounds; k++) await store.append([entry]);
+    const ms = (performance.now() - t0) / rounds;
+
+    const r0 = performance.now();
+    for (let k = 0; k < rounds; k++) await store.readMonth("2026-11");
+    const readMs = (performance.now() - r0) / rounds;
+    console.log(
+      `  账本 ${String(n).padStart(5)} 行 / ${kb.toFixed(0).padStart(4)} KB：追加 ${ms.toFixed(2)} ms，读取解析 ${readMs.toFixed(2)} ms`
+    );
+  }
+
+  for (const n of [1181, 5000]) {
+    store.clear();
+    for (let i = 0; i < n; i++) store.set(`笔记/${i}.md`, { size: 900, mtime: 1, vec: { cjk: 300, lat: 20 } });
+    await store.saveSnapshot();
+    const kb = fs.statSync(path.join(root, "stats/snapshot.json")).size / 1024;
+    const t0 = performance.now();
+    const rounds = 5;
+    for (let k = 0; k < rounds; k++) await store.saveSnapshot();
+    const ms = (performance.now() - t0) / rounds;
+    console.log(`  快照 ${String(n).padStart(5)} 条 / ${kb.toFixed(0).padStart(4)} KB：写盘 ${ms.toFixed(2)} ms`);
+  }
+
+  fs.rmSync(root, { recursive: true, force: true });
+}

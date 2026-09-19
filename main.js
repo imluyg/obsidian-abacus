@@ -1242,6 +1242,7 @@ class StatsStore {
         this.records = new Map();
         this.loaded = false;
         this.saveTimer = null;
+        this.lastSize = new Map();
         this.repairs = [];
     }
     get isLoaded() {
@@ -1309,7 +1310,7 @@ class StatsStore {
         await this.ensureDir("stats");
         await this.adapter.write(this.path(SNAPSHOT_REL), payload);
     }
-    scheduleSave(delay = 4000) {
+    scheduleSave(delay = 30000) {
         if (this.saveTimer !== null)
             window.clearTimeout(this.saveTimer);
         this.saveTimer = window.setTimeout(() => {
@@ -1345,10 +1346,13 @@ class StatsStore {
         await this.ensureDir("stats");
         await this.ensureDir(LEDGER_REL);
         for (const [ym, lines] of byMonth) {
-            const rel = this.ledgerPath(ym);
+            const full = this.path(this.ledgerPath(ym));
+            const payload = lines.join("\n") + "\n";
+            if (await this.tryFastAppend(full, payload))
+                continue;
             let prev = "";
             try {
-                prev = await this.adapter.read(this.path(rel));
+                prev = await this.adapter.read(full);
             }
             catch (_a) {
                 prev = "";
@@ -1356,8 +1360,29 @@ class StatsStore {
             const { text, dropped } = repairTail(prev);
             if (dropped > 0)
                 this.repairs.push({ ym, dropped });
-            await this.adapter.write(this.path(rel), text + lines.join("\n") + "\n");
+            await this.adapter.write(full, text + payload);
+            await this.rememberSize(full);
         }
+    }
+    async tryFastAppend(full, payload) {
+        if (!this.adapter.append || !this.adapter.stat)
+            return false;
+        const expected = this.lastSize.get(full);
+        if (expected === undefined)
+            return false;
+        const st = await this.adapter.stat(full);
+        if (!st || st.size !== expected)
+            return false;
+        await this.adapter.append(full, payload);
+        await this.rememberSize(full);
+        return true;
+    }
+    async rememberSize(full) {
+        if (!this.adapter.stat)
+            return;
+        const st = await this.adapter.stat(full);
+        if (st)
+            this.lastSize.set(full, st.size);
     }
     async readMonth(ym) {
         try {

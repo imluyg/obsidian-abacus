@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
+﻿import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import type { Vec } from "./types";
 
 export const VIEW_TYPE_STATS = "sixcolor-stats-view";
@@ -16,6 +16,14 @@ export interface ProjectRow {
   total: Vec;
 }
 
+export interface HealthInfo {
+  ok: boolean;
+  problems: string[];
+  months: number;
+  entries: number;
+  checkedAt: number;
+}
+
 export interface PanelData {
   todayAdd: Vec;
   todayDel: Vec;
@@ -28,6 +36,7 @@ export interface PanelData {
   range: number;
   streak: number;
   projects: ProjectRow[];
+  health?: HealthInfo;
   scanning: boolean;
   progress?: { done: number; total: number };
   updatedAt: number;
@@ -36,6 +45,7 @@ export interface PanelData {
 export interface ViewHooks {
   onRescan: () => void;
   onRange: (days: number) => void;
+  onAudit: () => void;
 }
 
 const RANGES = [7, 30];
@@ -178,6 +188,19 @@ export class StatsView extends ItemView {
         text: `汉字 ${fmt(d.current.vec.cjk)}　英文词 ${fmt(d.current.vec.lat)}`,
       });
     }
+
+    // 账本健康：常驻显示，比启动时弹一次 Notice 可靠
+    const healthEl = root.createDiv({ cls: "scs-health" });
+    if (!d.health) {
+      healthEl.setText("账本检查中…");
+    } else if (d.health.ok) {
+      healthEl.setText(`账本正常 · ${d.health.months} 个月 · ${fmt(d.health.entries)} 条`);
+    } else {
+      healthEl.addClass("is-bad");
+      healthEl.setText(`⚠ 账本异常 ${d.health.problems.length} 项 · 点击排查`);
+      healthEl.title = d.health.problems.join("\n");
+    }
+    healthEl.onclick = () => this.hooks.onAudit();
 
     root.createDiv({
       cls: "scs-foot",

@@ -1,9 +1,9 @@
-import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
+﻿import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "./types";
 import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
-import { StatsStore, dayKey, monthKey } from "./store";
+import { StatsStore, dayKey, monthKey, type LedgerAudit } from "./store";
 import { Scanner } from "./scanner";
-import { StatsView, VIEW_TYPE_STATS, type DayBar, type PanelData, type ProjectRow } from "./view";
+import { StatsView, VIEW_TYPE_STATS, type DayBar, type HealthInfo, type PanelData, type ProjectRow } from "./view";
 import { StatsSettingTab, type SettingsDirtyKind } from "./settings";
 import {
   addDays,
@@ -41,6 +41,7 @@ export default class SixColorStats extends Plugin {
   private refreshTimer: number | null = null;
   private progress: { done: number; total: number } | null = null;
   private streakCache: { at: number; value: number } | null = null;
+  private health: HealthInfo | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -79,6 +80,7 @@ export default class SixColorStats extends Plugin {
         new StatsView(leaf, {
           onRescan: () => void this.rebuild(),
           onRange: (days) => void this.setRange(days),
+          onAudit: () => void this.auditLedger(),
         })
     );
 
@@ -215,14 +217,16 @@ export default class SixColorStats extends Plugin {
   private updateStatusBar(data: PanelData): void {
     if (!this.statusBar) return;
     const today = data.todayAdd.cjk + data.todayAdd.lat;
+    const warn = data.health && !data.health.ok ? " ⚠" : "";
     this.statusBar.setText(
-      today === 0
+      (today === 0
         ? "今日 +0"
-        : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`
+        : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`) + warn
     );
     this.statusBar.title =
       `本周 汉字 ${data.weekAdd.cjk.toLocaleString("en-US")} / 词 ${data.weekAdd.lat.toLocaleString("en-US")}\n` +
       (data.streak > 0 ? `连续 ${data.streak} 天\n` : "") +
+      (data.health && !data.health.ok ? `⚠ ${data.health.problems[0]}\n` : "") +
       `全库 汉字 ${data.total.cjk.toLocaleString("en-US")} / 词 ${data.total.lat.toLocaleString("en-US")}\n` +
       `点击打开面板`;
   }
@@ -266,6 +270,7 @@ export default class SixColorStats extends Plugin {
       range,
       streak: await this.computeStreak(),
       projects: this.buildProjects(entries, now),
+      health: this.health ?? undefined,
       scanning: this.scanner?.isScanning ?? false,
       progress: this.progress ?? undefined,
       updatedAt: now,
@@ -492,18 +497,33 @@ export default class SixColorStats extends Plugin {
       this.store.repairs.length = 0;
     }
 
-    const now = Date.now();
-    const months = [...new Set([monthKey(now), monthKey(addDays(now, -40))])];
-    const a = await this.store.audit(months);
-    if (a.problems.length === 0) return;
-    new Notice(
-      `账本体检有 ${a.problems.length} 项异常：${a.problems[0]}　（命令面板 → 检查账本完整性）`,
-      10000
-    );
+    // 不再弹窗打扰：结果常驻在面板底部和状态栏角标上
+    await this.refreshHealth();
+  }
+
+  private setHealth(a: LedgerAudit): void {
+    this.health = {
+      ok: a.problems.length === 0,
+      problems: a.problems,
+      months: a.months.length,
+      entries: a.totalEntries,
+      checkedAt: Date.now(),
+    };
+    this.scheduleRefresh(0);
+  }
+
+  /** 全量体检一次，结果给面板和状态栏用 */
+  private async refreshHealth(): Promise<void> {
+    try {
+      this.setHealth(await this.store.audit());
+    } catch {
+      this.health = null;
+    }
   }
 
   async auditLedger(): Promise<void> {
     const a = await this.store.audit();
+    this.setHealth(a);
     if (a.problems.length === 0) {
       new Notice(`账本正常：${a.months.length} 个月 · ${a.totalEntries} 条事件`);
       return;

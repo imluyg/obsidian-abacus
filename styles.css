@@ -274,3 +274,29 @@
 .scs-bar-col.is-today .scs-bar-label {
   font-weight: 600;
 }
+
+/* ---- 账本健康角标 ---- */
+.scs-health {
+  margin-top: 14px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: 0.8em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.scs-health:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.scs-health.is-bad {
+  color: var(--text-error);
+  background: var(--background-modifier-error);
+}
+
+.scs-health.is-bad:hover {
+  background: var(--background-modifier-error-hover);
+  color: var(--text-error);
+}

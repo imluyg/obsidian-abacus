@@ -129,6 +129,7 @@ class SixColorStats extends obsidian_1.Plugin {
         this.refreshTimer = null;
         this.progress = null;
         this.streakCache = null;
+        this.health = null;
     }
     async onload() {
         var _a;
@@ -161,6 +162,7 @@ class SixColorStats extends obsidian_1.Plugin {
         this.registerView(view_1.VIEW_TYPE_STATS, (leaf) => new view_1.StatsView(leaf, {
             onRescan: () => void this.rebuild(),
             onRange: (days) => void this.setRange(days),
+            onAudit: () => void this.auditLedger(),
         }));
         this.statusBar = this.addStatusBarItem();
         this.statusBar.addClass("scs-statusbar");
@@ -280,17 +282,19 @@ class SixColorStats extends obsidian_1.Plugin {
         if (!this.statusBar)
             return;
         const today = data.todayAdd.cjk + data.todayAdd.lat;
-        this.statusBar.setText(today === 0
+        const warn = data.health && !data.health.ok ? " ⚠" : "";
+        this.statusBar.setText((today === 0
             ? "今日 +0"
-            : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`);
+            : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`) + warn);
         this.statusBar.title =
             `本周 汉字 ${data.weekAdd.cjk.toLocaleString("en-US")} / 词 ${data.weekAdd.lat.toLocaleString("en-US")}\n` +
                 (data.streak > 0 ? `连续 ${data.streak} 天\n` : "") +
+                (data.health && !data.health.ok ? `⚠ ${data.health.problems[0]}\n` : "") +
                 `全库 汉字 ${data.total.cjk.toLocaleString("en-US")} / 词 ${data.total.lat.toLocaleString("en-US")}\n` +
                 `点击打开面板`;
     }
     async buildPanelData() {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e;
         const now = Date.now();
         const range = this.settings.panelRange === 30 ? 30 : 7;
         const chartFrom = (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(range - 1));
@@ -325,8 +329,9 @@ class SixColorStats extends obsidian_1.Plugin {
             range,
             streak: await this.computeStreak(),
             projects: this.buildProjects(entries, now),
-            scanning: (_c = (_b = this.scanner) === null || _b === void 0 ? void 0 : _b.isScanning) !== null && _c !== void 0 ? _c : false,
-            progress: (_d = this.progress) !== null && _d !== void 0 ? _d : undefined,
+            health: (_b = this.health) !== null && _b !== void 0 ? _b : undefined,
+            scanning: (_d = (_c = this.scanner) === null || _c === void 0 ? void 0 : _c.isScanning) !== null && _d !== void 0 ? _d : false,
+            progress: (_e = this.progress) !== null && _e !== void 0 ? _e : undefined,
             updatedAt: now,
         };
     }
@@ -525,15 +530,29 @@ class SixColorStats extends obsidian_1.Plugin {
             new obsidian_1.Notice(`账本末尾发现截断，已丢弃 ${dropped} 个字符的残行后继续记录。`, 8000);
             this.store.repairs.length = 0;
         }
-        const now = Date.now();
-        const months = [...new Set([(0, store_1.monthKey)(now), (0, store_1.monthKey)((0, stats_1.addDays)(now, -40))])];
-        const a = await this.store.audit(months);
-        if (a.problems.length === 0)
-            return;
-        new obsidian_1.Notice(`账本体检有 ${a.problems.length} 项异常：${a.problems[0]}　（命令面板 → 检查账本完整性）`, 10000);
+        await this.refreshHealth();
+    }
+    setHealth(a) {
+        this.health = {
+            ok: a.problems.length === 0,
+            problems: a.problems,
+            months: a.months.length,
+            entries: a.totalEntries,
+            checkedAt: Date.now(),
+        };
+        this.scheduleRefresh(0);
+    }
+    async refreshHealth() {
+        try {
+            this.setHealth(await this.store.audit());
+        }
+        catch (_a) {
+            this.health = null;
+        }
     }
     async auditLedger() {
         const a = await this.store.audit();
+        this.setHealth(a);
         if (a.problems.length === 0) {
             new obsidian_1.Notice(`账本正常：${a.months.length} 个月 · ${a.totalEntries} 条事件`);
             return;
@@ -1711,6 +1730,19 @@ class StatsView extends obsidian_1.ItemView {
                 text: `汉字 ${fmt(d.current.vec.cjk)}　英文词 ${fmt(d.current.vec.lat)}`,
             });
         }
+        const healthEl = root.createDiv({ cls: "scs-health" });
+        if (!d.health) {
+            healthEl.setText("账本检查中…");
+        }
+        else if (d.health.ok) {
+            healthEl.setText(`账本正常 · ${d.health.months} 个月 · ${fmt(d.health.entries)} 条`);
+        }
+        else {
+            healthEl.addClass("is-bad");
+            healthEl.setText(`⚠ 账本异常 ${d.health.problems.length} 项 · 点击排查`);
+            healthEl.title = d.health.problems.join("\n");
+        }
+        healthEl.onclick = () => this.hooks.onAudit();
         root.createDiv({
             cls: "scs-foot",
             text: `${fmt(d.fileCount)} 个文件　更新于 ${new Date(d.updatedAt).toLocaleTimeString("zh-CN", {

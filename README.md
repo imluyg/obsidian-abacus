@@ -2,6 +2,8 @@
 
 **把写作量当账本记。** 一个 Obsidian 插件：汉字与英文词分开统计，按文件、按天、按项目记账。
 
+> English version: [README.en.md](./README.en.md)
+>
 > An Obsidian plugin that treats your writing output as a ledger: CJK characters and English words counted separately, tracked per file, per day, per project. Fully local — no network, no telemetry.
 
 ---

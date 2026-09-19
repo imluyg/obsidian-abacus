@@ -2,6 +2,7 @@ import { App, PluginSettingTab, Setting } from "obsidian";
 import type AbacusPlugin from "./main";
 import type { StatsSettings } from "./types";
 import { startOfWeek } from "./stats";
+import { L } from "./i18n";
 
 export type SettingsDirtyKind = "counter" | "scan" | "display";
 
@@ -14,43 +15,41 @@ export class StatsSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     const s = this.plugin.settings;
+    const t = L();
 
     /* ------------------------------ 口径 ------------------------------ */
 
-    containerEl.createEl("h3", { text: "统计口径" });
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text: "改动这里会重建快照（不产生写作记录），已记录的账本不受影响。",
-    });
+    containerEl.createEl("h3", { text: t.sCounter });
+    containerEl.createEl("p", { cls: "setting-item-description", text: t.sCounterDesc });
 
     new Setting(containerEl)
-      .setName("计入 YAML frontmatter")
-      .setDesc("默认不计入：属性区是元数据，不是正文。")
-      .addToggle((t) =>
-        t.setValue(s.countFrontmatter).onChange(async (v) => {
+      .setName(t.sFrontmatter)
+      .setDesc(t.sFrontmatterDesc)
+      .addToggle((c) =>
+        c.setValue(s.countFrontmatter).onChange(async (v) => {
           s.countFrontmatter = v;
           await this.plugin.applySettings(["counter"]);
         })
       );
 
     new Setting(containerEl)
-      .setName("计入代码块与行内代码")
-      .setDesc("默认不计入。")
-      .addToggle((t) =>
-        t.setValue(s.countCodeBlocks).onChange(async (v) => {
+      .setName(t.sCode)
+      .setDesc(t.sCodeDesc)
+      .addToggle((c) =>
+        c.setValue(s.countCodeBlocks).onChange(async (v) => {
           s.countCodeBlocks = v;
           await this.plugin.applySettings(["counter"]);
         })
       );
 
     new Setting(containerEl)
-      .setName("排除的文件夹")
-      .setDesc("每行一个，相对库根目录；这些目录不扫描、不统计。")
-      .addTextArea((t) => {
-        t.setValue(s.excludeFolders.join("\n"));
-        t.inputEl.rows = 4;
-        t.inputEl.addClass("scs-textarea");
-        t.onChange(async (v) => {
+      .setName(t.sExclude)
+      .setDesc(t.sExcludeDesc)
+      .addTextArea((c) => {
+        c.setValue(s.excludeFolders.join("\n"));
+        c.inputEl.rows = 4;
+        c.inputEl.addClass("scs-textarea");
+        c.onChange(async (v) => {
           s.excludeFolders = v
             .split("\n")
             .map((x) => x.trim())
@@ -59,43 +58,26 @@ export class StatsSettingTab extends PluginSettingTab {
         });
       });
 
-    /* ------------------------------ 显示 ------------------------------ */
-
-    containerEl.createEl("h3", { text: "显示" });
-
-    new Setting(containerEl)
-      .setName("主指标包含英文词")
-      .setDesc("关闭时状态栏只看汉字；两个分量在面板里始终分开显示。")
-      .addToggle((t) =>
-        t.setValue(s.includeLatinInPrimary).onChange(async (v) => {
-          s.includeLatinInPrimary = v;
-          await this.plugin.applySettings(["display"]);
-        })
-      );
-
     /* ------------------------------ 属性 ------------------------------ */
 
-    containerEl.createEl("h3", { text: "笔记属性" });
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text: "把汉字数写进笔记的 frontmatter，供 Bases / Dataview 排序、筛选、做公式。这会修改你的笔记，所以默认关闭。",
-    });
+    containerEl.createEl("h3", { text: t.sProps });
+    containerEl.createEl("p", { cls: "setting-item-description", text: t.sPropsDesc });
 
     new Setting(containerEl)
-      .setName("保存时把字数写进属性")
-      .setDesc("只在内容真的变化时写；值没变不会动文件，所以不会触发死循环。")
-      .addToggle((t) =>
-        t.setValue(s.writeFrontmatter).onChange(async (v) => {
+      .setName(t.sWriteProp)
+      .setDesc(t.sWritePropDesc)
+      .addToggle((c) =>
+        c.setValue(s.writeFrontmatter).onChange(async (v) => {
           s.writeFrontmatter = v;
           await this.plugin.applySettings(["display"]);
         })
       );
 
     new Setting(containerEl)
-      .setName("属性名")
-      .setDesc("默认 words。只写汉字数，英文词去账本里看。")
-      .addText((t) =>
-        t
+      .setName(t.sPropKey)
+      .setDesc(t.sPropKeyDesc)
+      .addText((c) =>
+        c
           .setPlaceholder("words")
           .setValue(s.frontmatterKey)
           .onChange(async (v) => {
@@ -104,71 +86,100 @@ export class StatsSettingTab extends PluginSettingTab {
           })
       );
 
+    /* ------------------------------ 显示 ------------------------------ */
+
+    containerEl.createEl("h3", { text: t.sDisplay });
+
+    new Setting(containerEl)
+      .setName(t.sLatinPrimary)
+      .setDesc(t.sLatinPrimaryDesc)
+      .addToggle((c) =>
+        c.setValue(s.includeLatinInPrimary).onChange(async (v) => {
+          s.includeLatinInPrimary = v;
+          await this.plugin.applySettings(["display"]);
+        })
+      );
+
     /* ------------------------------ 目标 ------------------------------ */
 
-    containerEl.createEl("h3", { text: "目标" });
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
+    containerEl.createEl("h3", { text: t.sGoals });
+    containerEl.createEl("p", { cls: "setting-item-description", text: t.sGoalsDesc });
+
+    new Setting(containerEl).setName(t.sDailyGoal).addText((c) => {
+      c.inputEl.type = "number";
+      c.setPlaceholder("0")
+        .setValue(String(s.dailyGoal ?? 0))
+        .onChange(async (v) => {
+          s.dailyGoal = Math.max(0, Math.floor(Number(v) || 0));
+          await this.plugin.applySettings(["display"]);
+        });
     });
 
-    new Setting(containerEl)
-      .setName("每日目标（汉字）")
-      .addText((t) => {
-        t.inputEl.type = "number";
-        t.setPlaceholder("0")
-          .setValue(String(s.dailyGoal ?? 0))
-          .onChange(async (v) => {
-            s.dailyGoal = Math.max(0, Math.floor(Number(v) || 0));
-            await this.plugin.applySettings(["display"]);
-          });
-      });
-
-    new Setting(containerEl)
-      .setName("每周目标（汉字）")
-      .addText((t) => {
-        t.inputEl.type = "number";
-        t.setPlaceholder("0")
-          .setValue(String(s.weeklyGoal ?? 0))
-          .onChange(async (v) => {
-            s.weeklyGoal = Math.max(0, Math.floor(Number(v) || 0));
-            await this.plugin.applySettings(["display"]);
-          });
-      });
+    new Setting(containerEl).setName(t.sWeeklyGoal).addText((c) => {
+      c.inputEl.type = "number";
+      c.setPlaceholder("0")
+        .setValue(String(s.weeklyGoal ?? 0))
+        .onChange(async (v) => {
+          s.weeklyGoal = Math.max(0, Math.floor(Number(v) || 0));
+          await this.plugin.applySettings(["display"]);
+        });
+    });
 
     /* ------------------------------ 项目 ------------------------------ */
 
-    containerEl.createEl("h3", { text: "项目分组" });
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text: "默认按路径前两段分组（创作/小说、归档/日记……）。需要更细的粒度就写规则，每行一条：`名称 = 路径前缀`，或只写路径前缀（名称取末段）。规则按前缀最长优先。",
+    containerEl.createEl("h3", { text: t.sProject });
+    containerEl.createEl("p", { cls: "setting-item-description", text: t.sProjectDesc });
+
+    new Setting(containerEl).setName(t.sRules).addTextArea((c) => {
+      c.setPlaceholder("小说1 = 创作/小说/1\n设定集 = 创作/设定集");
+      c.setValue(s.projectRules.join("\n"));
+      c.inputEl.rows = 5;
+      c.inputEl.addClass("scs-textarea");
+      c.onChange(async (v) => {
+        s.projectRules = v
+          .split("\n")
+          .map((x) => x.trim())
+          .filter(Boolean);
+        await this.plugin.applySettings(["display"]);
+      });
     });
 
+    /* ------------------------------ 报告 ------------------------------ */
+
+    containerEl.createEl("h3", { text: t.sReport });
+
     new Setting(containerEl)
-      .setName("分组规则")
-      .addTextArea((t) => {
-        t.setPlaceholder("小说1 = 创作/小说/1\n设定集 = 创作/设定集");
-        t.setValue(s.projectRules.join("\n"));
-        t.inputEl.rows = 5;
-        t.inputEl.addClass("scs-textarea");
-        t.onChange(async (v) => {
-          s.projectRules = v
-            .split("\n")
-            .map((x) => x.trim())
-            .filter(Boolean);
+      .setName(t.sYearReport)
+      .setDesc(t.sYearReportDesc)
+      .addButton((b) => b.setButtonText(t.sGenerate).onClick(() => void this.plugin.writeYearReport()));
+
+    new Setting(containerEl)
+      .setName(t.sCsv)
+      .setDesc(t.sCsvDesc)
+      .addButton((b) => b.setButtonText(t.sExport).onClick(() => void this.plugin.exportCsv()));
+
+    new Setting(containerEl)
+      .setName(t.sWeekly)
+      .setDesc(t.sWeeklyDesc)
+      .addButton((b) =>
+        b.setButtonText(t.sGenerate).onClick(() => void this.plugin.generateReport(startOfWeek(Date.now()), true))
+      );
+
+    new Setting(containerEl)
+      .setName(t.sAutoWeekly)
+      .setDesc(t.sAutoWeeklyDesc)
+      .addToggle((c) =>
+        c.setValue(s.autoWeeklyReport).onChange(async (v) => {
+          s.autoWeeklyReport = v;
           await this.plugin.applySettings(["display"]);
-        });
-      });
-
-    /* ------------------------------ 周报 ------------------------------ */
-
-    containerEl.createEl("h3", { text: "周报" });
+        })
+      );
 
     new Setting(containerEl)
-      .setName("周报目录")
-      .setDesc("生成的周报会写到这里。该目录自动排除在统计之外，否则周报会被算成“今天写的字”。")
-      .addText((t) =>
-        t
+      .setName(t.sReportFolder)
+      .setDesc(t.sReportFolderDesc)
+      .addText((c) =>
+        c
           .setPlaceholder("归档/统计归档")
           .setValue(s.reportFolder)
           .onChange(async (v) => {
@@ -177,60 +188,28 @@ export class StatsSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("生成年度报告")
-      .setDesc("含热力图、逐月、项目与文件排行，写入同目录的 `年度报告 YYYY.md`。")
-      .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeYearReport()));
-
-    new Setting(containerEl)
-      .setName("导出账本 CSV")
-      .setDesc("按天汇总成 CSV，方便在 Excel 或脚本里再分析。")
-      .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportCsv()));
-
-    new Setting(containerEl)
-      .setName("生成本周周报")
-      .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")
-      .addButton((b) =>
-        b.setButtonText("生成").onClick(() => void this.plugin.generateReport(startOfWeek(Date.now()), true))
-      );
-
-    new Setting(containerEl)
-      .setName("自动补生成上周周报")
-      .setDesc("每次启动检查一次：上周有写作、但还没有周报文件时自动生成。")
-      .addToggle((t) =>
-        t.setValue(s.autoWeeklyReport).onChange(async (v) => {
-          s.autoWeeklyReport = v;
-          await this.plugin.applySettings(["display"]);
-        })
-      );
-
     /* ------------------------------ 数据 ------------------------------ */
 
-    containerEl.createEl("h3", { text: "数据" });
-    containerEl.createEl("p", {
-      cls: "setting-item-description",
-      text: "数据目录：.obsidian/plugins/abacus/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
-    });
+    containerEl.createEl("h3", { text: t.sData });
+    containerEl.createEl("p", { cls: "setting-item-description", text: t.sDataDesc });
 
-    new Setting(containerEl).setName("立即重建快照").addButton((b) =>
-      b.setButtonText("重建").onClick(() => void this.plugin.rebuild())
+    new Setting(containerEl)
+      .setName(t.sRebuild)
+      .addButton((b) => b.setButtonText(t.sRebuildBtn).onClick(() => void this.plugin.rebuild()));
+
+    new Setting(containerEl)
+      .setName(t.sBackup)
+      .setDesc(t.sBackupDesc)
+      .addButton((b) => b.setButtonText(t.sExport).onClick(() => void this.plugin.exportLedger()));
+
+    new Setting(containerEl).setName(t.sBackupFolder).addText((c) =>
+      c
+        .setPlaceholder("归档/统计归档/账本备份")
+        .setValue(s.backupFolder)
+        .onChange(async (v) => {
+          s.backupFolder = v.trim() || "归档/统计归档/账本备份";
+          await this.plugin.applySettings(["display"]);
+        })
     );
-
-    new Setting(containerEl)
-      .setName("导出账本备份")
-      .setDesc("把账本合并成一个 JSON 写入下面这个目录。账本本体在 .obsidian 里不一定被同步，这份才是异地备份。")
-      .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportLedger()));
-
-    new Setting(containerEl)
-      .setName("账本备份目录")
-      .addText((t) =>
-        t
-          .setPlaceholder("归档/统计归档/账本备份")
-          .setValue(s.backupFolder)
-          .onChange(async (v) => {
-            s.backupFolder = v.trim() || "归档/统计归档/账本备份";
-            await this.plugin.applySettings(["display"]);
-          })
-      );
   }
 }

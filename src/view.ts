@@ -1,5 +1,6 @@
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import type { Vec } from "./types";
+import { L } from "./i18n";
 
 export const VIEW_TYPE_STATS = "abacus-view";
 
@@ -74,7 +75,7 @@ export class StatsView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "字数统计";
+    return L().viewName;
   }
 
   getIcon(): string {
@@ -95,31 +96,32 @@ export class StatsView extends ItemView {
   }
 
   private render(): void {
+    const t = L();
     const root = this.contentEl;
     root.empty();
     root.addClass("scs-panel");
 
     const header = root.createDiv({ cls: "scs-header" });
-    header.createDiv({ cls: "scs-title", text: "今日" });
+    header.createDiv({ cls: "scs-title", text: t.today });
     const buttons = header.createDiv({ cls: "scs-header-actions" });
 
     for (const r of RANGES) {
       const b = buttons.createEl("button", {
         cls: "scs-range-btn" + (this.data?.range === r ? " is-active" : ""),
-        text: `${r}天`,
+        text: t.rangeDays(r),
       });
       b.onclick = () => this.hooks.onRange(r);
     }
 
     const refresh = buttons.createEl("button", {
       cls: "scs-icon-btn",
-      attr: { "aria-label": "重新扫描" },
+      attr: { "aria-label": t.rescan },
     });
     setIcon(refresh, "refresh-cw");
     refresh.onclick = () => this.hooks.onRescan();
 
     if (!this.data) {
-      root.createDiv({ cls: "scs-empty", text: "正在读取…" });
+      root.createDiv({ cls: "scs-empty", text: t.reading });
       return;
     }
     const d = this.data;
@@ -127,25 +129,25 @@ export class StatsView extends ItemView {
     if (d.scanning && d.progress) {
       root.createDiv({
         cls: "scs-progress",
-        text: `扫描中 ${d.progress.done} / ${d.progress.total}`,
+        text: t.scanning(d.progress.done, d.progress.total),
       });
     }
 
     // 今日主数字
     const hero = root.createDiv({ cls: "scs-hero" });
     hero.createDiv({ cls: "scs-hero-num", text: fmt(d.todayAdd.cjk) });
-    hero.createDiv({ cls: "scs-hero-unit", text: "汉字" });
+    hero.createDiv({ cls: "scs-hero-unit", text: t.cjk });
 
     const heroSub = root.createDiv({ cls: "scs-hero-sub" });
-    heroSub.createSpan({ text: `英文词 ${fmt(d.todayAdd.lat)}` });
+    heroSub.createSpan({ text: t.latinWords(fmt(d.todayAdd.lat)) });
     if (d.todayDel.cjk > 0 || d.todayDel.lat > 0) {
       heroSub.createSpan({
         cls: "scs-del",
-        text: `　删改 −${fmt(d.todayDel.cjk)} / −${fmt(d.todayDel.lat)}`,
+        text: t.deleted(fmt(d.todayDel.cjk), fmt(d.todayDel.lat)),
       });
     }
     if (d.streak > 0) {
-      heroSub.createSpan({ cls: "scs-streak", text: `　连续 ${d.streak} 天` });
+      heroSub.createSpan({ cls: "scs-streak", text: t.streak(d.streak) });
     }
 
     // 今日目标：有目标才出现
@@ -157,7 +159,7 @@ export class StatsView extends ItemView {
       track.createDiv({ cls: "scs-goal-fill", attr: { style: `width:${pct}%` } });
       goal.createDiv({
         cls: "scs-goal-text",
-        text: `${fmt(d.todayAdd.cjk)} / ${fmt(d.dailyGoal)} 字 · ${pct}%`,
+        text: t.goalText(fmt(d.todayAdd.cjk), fmt(d.dailyGoal), pct),
       });
     }
 
@@ -176,39 +178,47 @@ export class StatsView extends ItemView {
       const showLabel =
         d.days.length <= 7 || bar.isToday || (d.days.length - 1 - i) % labelEvery === 0;
       if (showLabel) col.createDiv({ cls: "scs-bar-label", text: bar.label });
-      col.title = `${bar.day}　汉字 ${fmt(bar.vec.cjk)}　英文词 ${fmt(bar.vec.lat)}`;
+      col.title = t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
     });
 
     // 汇总
     const grid = root.createDiv({ cls: "scs-grid" });
-    this.metric(grid, "本周", d.weekAdd);
-    this.metric(grid, "本月", d.monthAdd);
-    this.metric(grid, "全库", d.total);
+    this.metric(grid, t.week, d.weekAdd);
+    this.metric(grid, t.month, d.monthAdd);
+    this.metric(grid, t.all, d.total);
 
     if (d.weeklyGoal > 0) {
       const pct = Math.min(100, Math.round((d.weekAdd.cjk / d.weeklyGoal) * 100));
       const line = root.createDiv({
         cls: "scs-goal-line" + (d.weekAdd.cjk >= d.weeklyGoal ? " is-done" : ""),
-        text: `本周 ${fmt(d.weekAdd.cjk)} / ${fmt(d.weeklyGoal)} 字 · ${pct}%`,
+        text: t.weekGoalText(fmt(d.weekAdd.cjk), fmt(d.weeklyGoal), pct),
       });
-      line.setAttr("title", `本周目标 ${fmt(d.weeklyGoal)} 汉字`);
+      line.setAttr("title", t.weekGoalTitle(fmt(d.weeklyGoal)));
     }
 
     // 项目
     if (d.projects.length > 0) {
       const proj = root.createDiv({ cls: "scs-projects" });
-      proj.createDiv({ cls: "scs-section-title", text: "项目" });
+      proj.createDiv({ cls: "scs-section-title", text: t.projects });
       const head = proj.createDiv({ cls: "scs-project-row is-head" });
       head.createDiv({ cls: "scs-project-name", text: "" });
-      head.createDiv({ cls: "scs-project-num", text: "本月" });
-      head.createDiv({ cls: "scs-project-num", text: "累计" });
+      head.createDiv({ cls: "scs-project-num", text: t.month });
+      head.createDiv({ cls: "scs-project-num", text: t.runningTotal });
       for (const p of d.projects) {
         const selected = d.selectedProject === p.name;
-        const row = proj.createDiv({ cls: "scs-project-row is-clickable" + (selected ? " is-selected" : "") });
+        const row = proj.createDiv({
+          cls: "scs-project-row is-clickable" + (selected ? " is-selected" : ""),
+        });
         row.createDiv({ cls: "scs-project-name", text: p.name });
         row.createDiv({ cls: "scs-project-num", text: fmt(p.month.cjk) });
         row.createDiv({ cls: "scs-project-num is-dim", text: fmt(p.total.cjk) });
-        row.title = `${p.name}\n本月 汉字 ${fmt(p.month.cjk)} / 词 ${fmt(p.month.lat)}\n累计 汉字 ${fmt(p.total.cjk)} / 词 ${fmt(p.total.lat)}\n点击查看该项目下的文件`;
+        row.title = t.projectTip(
+          p.name,
+          fmt(p.month.cjk),
+          fmt(p.month.lat),
+          fmt(p.total.cjk),
+          fmt(p.total.lat)
+        );
         row.onclick = () => this.hooks.onProject(p.name);
       }
 
@@ -216,7 +226,7 @@ export class StatsView extends ItemView {
         const files = proj.createDiv({ cls: "scs-files" });
         files.createDiv({ cls: "scs-files-title", text: d.selectedProject });
         if (d.projectFiles.length === 0) {
-          files.createDiv({ cls: "scs-files-empty", text: "本月没有改动" });
+          files.createDiv({ cls: "scs-files-empty", text: t.noChangesThisMonth });
         }
         for (const f of d.projectFiles) {
           const item = files.createDiv({ cls: "scs-file-row" });
@@ -225,7 +235,13 @@ export class StatsView extends ItemView {
             cls: "scs-file-num",
             text: f.month.cjk > 0 ? `+${fmt(f.month.cjk)}` : fmt(f.total.cjk),
           });
-          item.title = `${f.path}\n本月新增 汉字 ${fmt(f.month.cjk)} / 词 ${fmt(f.month.lat)}\n全文 汉字 ${fmt(f.total.cjk)} / 词 ${fmt(f.total.lat)}`;
+          item.title = t.fileTip(
+            f.path,
+            fmt(f.month.cjk),
+            fmt(f.month.lat),
+            fmt(f.total.cjk),
+            fmt(f.total.lat)
+          );
         }
       }
     }
@@ -233,40 +249,41 @@ export class StatsView extends ItemView {
     // 当前文件
     if (d.current) {
       const cur = root.createDiv({ cls: "scs-current" });
-      cur.createDiv({ cls: "scs-current-label", text: "当前文件" });
-      cur.createDiv({ cls: "scs-current-name", text: d.current.path.split("/").pop() ?? d.current.path });
+      cur.createDiv({ cls: "scs-current-label", text: t.currentFile });
+      cur.createDiv({
+        cls: "scs-current-name",
+        text: d.current.path.split("/").pop() ?? d.current.path,
+      });
       cur.createDiv({
         cls: "scs-current-num",
-        text: `汉字 ${fmt(d.current.vec.cjk)}　英文词 ${fmt(d.current.vec.lat)}`,
+        text: t.currentNum(fmt(d.current.vec.cjk), fmt(d.current.vec.lat)),
       });
     }
 
     // 账本健康：常驻显示，比启动时弹一次 Notice 可靠
     const healthEl = root.createDiv({ cls: "scs-health" });
     if (!d.health) {
-      healthEl.setText("账本检查中…");
+      healthEl.setText(t.healthChecking);
     } else if (d.health.ok) {
-      healthEl.setText(`账本正常 · ${d.health.months} 个月 · ${fmt(d.health.entries)} 条`);
+      healthEl.setText(t.healthOk(d.health.months, fmt(d.health.entries)));
     } else {
       healthEl.addClass("is-bad");
-      healthEl.setText(`⚠ 账本异常 ${d.health.problems.length} 项 · 点击排查`);
+      healthEl.setText(t.healthBad(d.health.problems.length));
       healthEl.title = d.health.problems.join("\n");
     }
     healthEl.onclick = () => this.hooks.onAudit();
 
-    root.createDiv({
-      cls: "scs-foot",
-      text: `${fmt(d.fileCount)} 个文件　更新于 ${new Date(d.updatedAt).toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })}`,
+    const time = new Date(d.updatedAt).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
     });
+    root.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
   }
 
   private metric(parent: HTMLElement, label: string, v: Vec): void {
     const box = parent.createDiv({ cls: "scs-metric" });
     box.createDiv({ cls: "scs-metric-label", text: label });
     box.createDiv({ cls: "scs-metric-main", text: fmt(v.cjk) });
-    box.createDiv({ cls: "scs-metric-sub", text: `词 ${fmt(v.lat)}` });
+    box.createDiv({ cls: "scs-metric-sub", text: L().wordsShort(fmt(v.lat)) });
   }
 }

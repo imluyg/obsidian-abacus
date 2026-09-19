@@ -103,6 +103,256 @@ function diffCounts(prev, next, opts) {
 }
 
 };
+__modules["i18n.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.setLang = setLang;
+exports.L = L;
+exports.detectLang = detectLang;
+const zh = {
+    viewName: "字数统计",
+    today: "今日",
+    rescan: "重新扫描",
+    reading: "正在读取…",
+    scanning: (done, total) => `扫描中 ${done} / ${total}`,
+    cjk: "汉字",
+    latinWords: (n) => `英文词 ${n}`,
+    deleted: (c, l) => `　删改 −${c} / −${l}`,
+    streak: (n) => `　连续 ${n} 天`,
+    goalText: (done, goal, pct) => `${done} / ${goal} 字 · ${pct}%`,
+    week: "本周",
+    month: "本月",
+    all: "全库",
+    weekGoalText: (done, goal, pct) => `本周 ${done} / ${goal} 字 · ${pct}%`,
+    weekGoalTitle: (goal) => `本周目标 ${goal} 汉字`,
+    projects: "项目",
+    runningTotal: "累计",
+    projectTip: (name, m, ml, t, tl) => `${name}\n本月 汉字 ${m} / 词 ${ml}\n累计 汉字 ${t} / 词 ${tl}\n点击查看该项目下的文件`,
+    noChangesThisMonth: "本月没有改动",
+    fileTip: (path, m, ml, t, tl) => `${path}\n本月新增 汉字 ${m} / 词 ${ml}\n全文 汉字 ${t} / 词 ${tl}`,
+    currentFile: "当前文件",
+    currentNum: (c, l) => `汉字 ${c}　英文词 ${l}`,
+    chartTip: (day, c, l) => `${day}　汉字 ${c}　英文词 ${l}`,
+    healthChecking: "账本检查中…",
+    healthOk: (months, entries) => `账本正常 · ${months} 个月 · ${entries} 条`,
+    healthBad: (n) => `⚠ 账本异常 ${n} 项 · 点击排查`,
+    foot: (files, time) => `${files} 个文件　更新于 ${time}`,
+    wordsShort: (n) => `词 ${n}`,
+    rangeDays: (n) => `${n}天`,
+    cmdOpen: "打开统计面板",
+    cmdRebuild: "重建全库快照",
+    cmdWeekly: "生成本周周报",
+    cmdWeeklyLast: "补生成上周周报",
+    cmdYear: "生成年度报告",
+    cmdCsv: "导出账本 CSV",
+    cmdBackup: "导出账本备份",
+    cmdSyncFm: "把字数写入当前笔记属性",
+    cmdAudit: "检查账本完整性",
+    noticeBaseline: (n) => `已建立快照：${n} 个文件。从今天起开始记账。`,
+    noticeRebuilding: "正在重建快照…",
+    noticeRebuilt: (n) => `快照已重建：${n} 个文件。账本未改动。`,
+    noticeWeekly: (p) => `周报已写入 ${p}`,
+    noticeWeeklyFail: (e) => `写周报失败：${e}`,
+    noticeYear: (p) => `年度报告已写入 ${p}`,
+    noticeYearFail: (e) => `写年度报告失败：${e}`,
+    noticeCsv: (days, p) => `已导出 ${days} 天到 ${p}`,
+    noticeCsvFail: (e) => `导出 CSV 失败：${e}`,
+    noticeBackup: (p, n) => `账本已导出：${p}（${n} 条）`,
+    noticeBackupFail: (e) => `导出失败：${e}`,
+    noticeLedgerEmpty: "账本还是空的，没有可导出的内容。",
+    noticeFmWritten: (k, n) => `已写入 ${k}: ${n}`,
+    noticeFmLatest: (k, n) => `${k} 已经是最新（${n}）`,
+    noticeFmFail: (e) => `写入属性失败：${e}`,
+    noticeNoFile: "没有打开的笔记。",
+    noticeNotCounted: "这篇还没统计到，先保存一次。",
+    noticeAuditOk: (months, entries) => `账本正常：${months} 个月 · ${entries} 条事件`,
+    noticeAuditBad: (n, p) => `账本体检发现 ${n} 项问题，已写入 ${p}`,
+    noticeRepair: (n) => `账本末尾发现截断，已丢弃 ${n} 个字符的残行后继续记录。`,
+    statusToday: (c, l) => `今日 +${c}字 +${l}词`,
+    statusTodayZero: "今日 +0",
+    statusTitleWeek: (c, l) => `本周 汉字 ${c} / 词 ${l}`,
+    statusTitleStreak: (n) => `连续 ${n} 天`,
+    statusTitleTotal: (c, l) => `全库 汉字 ${c} / 词 ${l}`,
+    statusTitleClick: "点击打开面板",
+    sCounter: "统计口径",
+    sCounterDesc: "改动这里会重建快照（不产生写作记录），已记录的账本不受影响。",
+    sFrontmatter: "计入 YAML frontmatter",
+    sFrontmatterDesc: "默认不计入：属性区是元数据，不是正文。",
+    sCode: "计入代码块与行内代码",
+    sCodeDesc: "默认不计入。",
+    sExclude: "排除的文件夹",
+    sExcludeDesc: "每行一个，相对库根目录；这些目录不扫描、不统计。",
+    sProps: "笔记属性",
+    sPropsDesc: "把汉字数写进笔记的 frontmatter，供 Bases / Dataview 排序、筛选、做公式。这会修改你的笔记，所以默认关闭。",
+    sWriteProp: "保存时把字数写进属性",
+    sWritePropDesc: "只在内容真的变化时写；值没变不会动文件，所以不会触发死循环。",
+    sPropKey: "属性名",
+    sPropKeyDesc: "默认 words。只写汉字数，英文词去账本里看。",
+    sDisplay: "显示",
+    sLatinPrimary: "主指标包含英文词",
+    sLatinPrimaryDesc: "关闭时状态栏只看汉字；两个分量在面板里始终分开显示。",
+    sGoals: "目标",
+    sGoalsDesc: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
+    sDailyGoal: "每日目标（汉字）",
+    sWeeklyGoal: "每周目标（汉字）",
+    sProject: "项目分组",
+    sProjectDesc: "默认按路径前两段分组（创作/小说、归档/日记……）。需要更细的粒度就写规则，每行一条：`名称 = 路径前缀`，或只写路径前缀（名称取末段）。规则按前缀最长优先。",
+    sRules: "分组规则",
+    sReport: "报告",
+    sYearReport: "生成年度报告",
+    sYearReportDesc: "含热力图、逐月、项目与文件排行，写入同目录的 `年度报告 YYYY.md`。",
+    sCsv: "导出账本 CSV",
+    sCsvDesc: "按天汇总成 CSV，方便在 Excel 或脚本里再分析。",
+    sWeekly: "生成本周周报",
+    sWeeklyDesc: "写入 `周报 YYYY-Www.md`，同名会覆盖。",
+    sGenerate: "生成",
+    sExport: "导出",
+    sAutoWeekly: "自动补生成上周周报",
+    sAutoWeeklyDesc: "每次启动检查一次：上周有写作、但还没有周报文件时自动生成。",
+    sReportFolder: "周报目录",
+    sReportFolderDesc: "生成的周报会写到这里。该目录自动排除在统计之外，否则周报会被算成“今天写的字”。",
+    sData: "数据",
+    sDataDesc: "数据目录：.obsidian/plugins/abacus/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
+    sRebuild: "立即重建快照",
+    sRebuildBtn: "重建",
+    sBackup: "导出账本备份",
+    sBackupDesc: "把账本合并成一个 JSON 写入下面这个目录。账本本体在 .obsidian 里不一定被同步，这份才是异地备份。",
+    sBackupFolder: "账本备份目录",
+};
+const en = {
+    viewName: "Writing stats",
+    today: "Today",
+    rescan: "Rescan",
+    reading: "Loading…",
+    scanning: (done, total) => `Scanning ${done} / ${total}`,
+    cjk: "CJK",
+    latinWords: (n) => `words ${n}`,
+    deleted: (c, l) => `　edited −${c} / −${l}`,
+    streak: (n) => `　${n}-day streak`,
+    goalText: (done, goal, pct) => `${done} / ${goal} · ${pct}%`,
+    week: "Week",
+    month: "Month",
+    all: "Vault",
+    weekGoalText: (done, goal, pct) => `Week ${done} / ${goal} · ${pct}%`,
+    weekGoalTitle: (goal) => `Weekly goal ${goal} characters`,
+    projects: "Projects",
+    runningTotal: "Total",
+    projectTip: (name, m, ml, t, tl) => `${name}\nThis month ${m} CJK / ${ml} words\nTotal ${t} CJK / ${tl} words\nClick to list files`,
+    noChangesThisMonth: "No changes this month",
+    fileTip: (path, m, ml, t, tl) => `${path}\nThis month +${m} CJK / +${ml} words\nTotal ${t} CJK / ${tl} words`,
+    currentFile: "Current note",
+    currentNum: (c, l) => `${c} CJK　${l} words`,
+    chartTip: (day, c, l) => `${day}　${c} CJK　${l} words`,
+    healthChecking: "Checking ledger…",
+    healthOk: (months, entries) => `Ledger OK · ${months} months · ${entries} entries`,
+    healthBad: (n) => `⚠ ${n} ledger issue(s) · click to inspect`,
+    foot: (files, time) => `${files} files　updated ${time}`,
+    wordsShort: (n) => `words ${n}`,
+    rangeDays: (n) => `${n}d`,
+    cmdOpen: "Open stats panel",
+    cmdRebuild: "Rebuild vault snapshot",
+    cmdWeekly: "Generate this week's report",
+    cmdWeeklyLast: "Generate last week's report",
+    cmdYear: "Generate yearly report",
+    cmdCsv: "Export ledger as CSV",
+    cmdBackup: "Export ledger backup",
+    cmdSyncFm: "Write word count to current note",
+    cmdAudit: "Check ledger integrity",
+    noticeBaseline: (n) => `Snapshot built: ${n} files. Recording starts today.`,
+    noticeRebuilding: "Rebuilding snapshot…",
+    noticeRebuilt: (n) => `Snapshot rebuilt: ${n} files. Ledger untouched.`,
+    noticeWeekly: (p) => `Weekly report written to ${p}`,
+    noticeWeeklyFail: (e) => `Failed to write weekly report: ${e}`,
+    noticeYear: (p) => `Yearly report written to ${p}`,
+    noticeYearFail: (e) => `Failed to write yearly report: ${e}`,
+    noticeCsv: (days, p) => `Exported ${days} days to ${p}`,
+    noticeCsvFail: (e) => `Failed to export CSV: ${e}`,
+    noticeBackup: (p, n) => `Ledger exported: ${p} (${n} entries)`,
+    noticeBackupFail: (e) => `Export failed: ${e}`,
+    noticeLedgerEmpty: "The ledger is still empty.",
+    noticeFmWritten: (k, n) => `Wrote ${k}: ${n}`,
+    noticeFmLatest: (k, n) => `${k} is already up to date (${n})`,
+    noticeFmFail: (e) => `Failed to write property: ${e}`,
+    noticeNoFile: "No note is open.",
+    noticeNotCounted: "This note hasn't been counted yet — save it once.",
+    noticeAuditOk: (months, entries) => `Ledger OK: ${months} months · ${entries} entries`,
+    noticeAuditBad: (n, p) => `Ledger check found ${n} issue(s), written to ${p}`,
+    noticeRepair: (n) => `Truncated tail found in the ledger; dropped ${n} characters and continued.`,
+    statusToday: (c, l) => `Today +${c}c +${l}w`,
+    statusTodayZero: "Today +0",
+    statusTitleWeek: (c, l) => `Week ${c} CJK / ${l} words`,
+    statusTitleStreak: (n) => `${n}-day streak`,
+    statusTitleTotal: (c, l) => `Vault ${c} CJK / ${l} words`,
+    statusTitleClick: "Click to open the panel",
+    sCounter: "Counting rules",
+    sCounterDesc: "Changing these rebuilds the snapshot (no writing is recorded). The ledger is untouched.",
+    sFrontmatter: "Include YAML frontmatter",
+    sFrontmatterDesc: "Off by default: properties are metadata, not prose.",
+    sCode: "Include code blocks and inline code",
+    sCodeDesc: "Off by default.",
+    sExclude: "Excluded folders",
+    sExcludeDesc: "One per line, relative to the vault root. These folders are neither scanned nor counted.",
+    sProps: "Note properties",
+    sPropsDesc: "Write the CJK count into each note's frontmatter so Bases / Dataview can sort, filter and compute on it. This modifies your notes, so it is off by default.",
+    sWriteProp: "Write word count on save",
+    sWritePropDesc: "Only writes when the content actually changed, so it can't loop.",
+    sPropKey: "Property name",
+    sPropKeyDesc: "Defaults to words. Only the CJK count is written; see the ledger for the split.",
+    sDisplay: "Display",
+    sLatinPrimary: "Include English words in the primary metric",
+    sLatinPrimaryDesc: "When off, the status bar shows CJK only; the panel always shows both separately.",
+    sGoals: "Goals",
+    sGoalsDesc: "Counted in CJK characters. 0 or empty means no goal; with a goal the panel shows a progress bar and the weekly report gains a streak-of-goals row.",
+    sDailyGoal: "Daily goal (CJK)",
+    sWeeklyGoal: "Weekly goal (CJK)",
+    sProject: "Project grouping",
+    sProjectDesc: "By default the first two path segments form a project (创作/小说, 归档/日记…). For finer control, add rules, one per line: `Name = path prefix`, or just a prefix (the name is its last segment). Longest prefix wins.",
+    sRules: "Grouping rules",
+    sReport: "Reports",
+    sYearReport: "Generate yearly report",
+    sYearReportDesc: "Heatmap, per-month, projects and top files, written to `年度报告 YYYY.md`.",
+    sCsv: "Export ledger as CSV",
+    sCsvDesc: "Daily totals as CSV, for analysis in Excel or a script.",
+    sWeekly: "Generate this week's report",
+    sWeeklyDesc: "Written to `周报 YYYY-Www.md`; an existing file is overwritten.",
+    sGenerate: "Generate",
+    sExport: "Export",
+    sAutoWeekly: "Auto-generate last week's report",
+    sAutoWeeklyDesc: "On startup, generate it if last week has writing and no report file yet.",
+    sReportFolder: "Report folder",
+    sReportFolderDesc: "Where reports are written. This folder is excluded from counting, otherwise reports would count as writing.",
+    sData: "Data",
+    sDataDesc: "Data lives in .obsidian/plugins/abacus/stats/. snapshot.json is rebuildable; ledger/*.jsonl is the append-only event log and cannot be reconstructed.",
+    sRebuild: "Rebuild snapshot now",
+    sRebuildBtn: "Rebuild",
+    sBackup: "Export ledger backup",
+    sBackupDesc: "Merge the ledger into one JSON in the folder below. The ledger itself may not be synced, so this is the off-site copy.",
+    sBackupFolder: "Backup folder",
+};
+let current = zh;
+function setLang(lang) {
+    current = lang === "en" ? en : zh;
+}
+function L() {
+    return current;
+}
+function detectLang() {
+    try {
+        const raw = window.localStorage.getItem("language");
+        if (raw)
+            return raw.toLowerCase().startsWith("zh") ? "zh" : "en";
+    }
+    catch (_a) {
+    }
+    try {
+        return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+    }
+    catch (_b) {
+        return "zh";
+    }
+}
+
+};
 __modules["main.ts"] = function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -111,6 +361,7 @@ const obsidian_1 = require("obsidian");
 const types_1 = require("./types");
 const store_1 = require("./store");
 Object.defineProperty(exports, "monthKey", { enumerable: true, get: function () { return store_1.monthKey; } });
+const i18n_1 = require("./i18n");
 const scanner_1 = require("./scanner");
 const view_1 = require("./view");
 const settings_1 = require("./settings");
@@ -150,6 +401,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
     }
     async onload() {
         var _a;
+        (0, i18n_1.setLang)((0, i18n_1.detectLang)());
         await this.loadSettings();
         const baseDir = (_a = this.manifest.dir) !== null && _a !== void 0 ? _a : `.obsidian/plugins/${this.manifest.id}`;
         const adapter = this.app.vault.adapter;
@@ -185,59 +437,59 @@ class AbacusPlugin extends obsidian_1.Plugin {
         }));
         this.statusBar = this.addStatusBarItem();
         this.statusBar.addClass("scs-statusbar");
-        this.statusBar.setText("统计中…");
+        this.statusBar.setText((0, i18n_1.L)().reading);
         this.statusBar.onclick = () => void this.activateView();
-        this.statusBar.title = "点击打开字数统计面板";
-        this.addRibbonIcon("calculator", "字数统计", () => void this.activateView());
-        this.addCommand({ id: "open-panel", name: "打开统计面板", callback: () => void this.activateView() });
-        this.addCommand({ id: "rebuild", name: "重建全库快照", callback: () => void this.rebuild() });
+        this.statusBar.title = (0, i18n_1.L)().statusTitleClick;
+        this.addRibbonIcon("calculator", (0, i18n_1.L)().viewName, () => void this.activateView());
+        this.addCommand({ id: "open-panel", name: (0, i18n_1.L)().cmdOpen, callback: () => void this.activateView() });
+        this.addCommand({ id: "rebuild", name: (0, i18n_1.L)().cmdRebuild, callback: () => void this.rebuild() });
         this.addCommand({
             id: "weekly-report",
-            name: "生成本周周报",
+            name: (0, i18n_1.L)().cmdWeekly,
             callback: () => void this.generateReport((0, stats_1.startOfWeek)(Date.now()), true),
         });
         this.addCommand({
             id: "weekly-report-last",
-            name: "补生成上周周报",
+            name: (0, i18n_1.L)().cmdWeeklyLast,
             callback: () => void this.generateReport((0, stats_1.addDays)((0, stats_1.startOfWeek)(Date.now()), -7), true),
         });
         this.addCommand({
             id: "export-ledger",
-            name: "导出账本备份",
+            name: (0, i18n_1.L)().cmdBackup,
             callback: () => void this.exportLedger(),
         });
         this.addCommand({
             id: "year-report",
-            name: "生成年度报告",
+            name: (0, i18n_1.L)().cmdYear,
             callback: () => void this.writeYearReport(),
         });
         this.addCommand({
             id: "export-csv",
-            name: "导出账本 CSV",
+            name: (0, i18n_1.L)().cmdCsv,
             callback: () => void this.exportCsv(),
         });
         this.addCommand({
             id: "sync-frontmatter",
-            name: "把字数写入当前笔记属性",
+            name: (0, i18n_1.L)().cmdSyncFm,
             callback: async () => {
                 const file = this.app.workspace.getActiveFile();
                 if (!file) {
-                    new obsidian_1.Notice("没有打开的笔记。");
+                    new obsidian_1.Notice((0, i18n_1.L)().noticeNoFile);
                     return;
                 }
                 const rec = this.store.get(file.path);
                 if (!rec) {
-                    new obsidian_1.Notice("这篇还没统计到，先保存一次。");
+                    new obsidian_1.Notice((0, i18n_1.L)().noticeNotCounted);
                     return;
                 }
                 const key = this.settings.frontmatterKey || "words";
                 const changed = await this.syncFrontmatter(file.path, true);
-                new obsidian_1.Notice(changed ? `已写入 ${key}: ${rec.vec.cjk}` : `${key} 已经是最新（${rec.vec.cjk}）`);
+                new obsidian_1.Notice(changed ? (0, i18n_1.L)().noticeFmWritten(key, rec.vec.cjk) : (0, i18n_1.L)().noticeFmLatest(key, rec.vec.cjk));
             },
         });
         this.addCommand({
             id: "audit-ledger",
-            name: "检查账本完整性",
+            name: (0, i18n_1.L)().cmdAudit,
             callback: () => void this.auditLedger(),
         });
         this.addSettingTab(new settings_1.StatsSettingTab(this.app, this));
@@ -273,20 +525,20 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const res = await this.scanner.fullScan(false);
         this.progress = null;
         if (res.baseline && res.files > 0) {
-            new obsidian_1.Notice(`已建立快照：${res.files} 个文件。从今天起开始记账。`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeBaseline(res.files));
         }
         await this.refresh();
         void this.autoWeeklyReport();
         void this.checkLedgerHealth();
     }
     async rebuild() {
-        new obsidian_1.Notice("正在重建快照…");
+        new obsidian_1.Notice((0, i18n_1.L)().noticeRebuilding);
         this.store.clear();
         const res = await this.scanner.fullScan(true);
         this.invalidate();
         this.progress = null;
         await this.refresh();
-        new obsidian_1.Notice(`快照已重建：${res.files} 个文件。账本未改动。`);
+        new obsidian_1.Notice((0, i18n_1.L)().noticeRebuilt(res.files));
     }
     async setRange(days) {
         if (this.settings.panelRange === days)
@@ -329,17 +581,20 @@ class AbacusPlugin extends obsidian_1.Plugin {
     updateStatusBar(data) {
         if (!this.statusBar)
             return;
+        const t = (0, i18n_1.L)();
         const today = data.todayAdd.cjk + data.todayAdd.lat;
         const warn = data.health && !data.health.ok ? " ⚠" : "";
-        this.statusBar.setText((today === 0
-            ? "今日 +0"
-            : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`) + warn);
+        const c = data.todayAdd.cjk.toLocaleString("en-US");
+        const l = data.todayAdd.lat.toLocaleString("en-US");
+        this.statusBar.setText((today === 0 ? t.statusTodayZero : t.statusToday(c, l)) + warn);
         this.statusBar.title =
-            `本周 汉字 ${data.weekAdd.cjk.toLocaleString("en-US")} / 词 ${data.weekAdd.lat.toLocaleString("en-US")}\n` +
-                (data.streak > 0 ? `连续 ${data.streak} 天\n` : "") +
+            t.statusTitleWeek(data.weekAdd.cjk.toLocaleString("en-US"), data.weekAdd.lat.toLocaleString("en-US")) +
+                "\n" +
+                (data.streak > 0 ? t.statusTitleStreak(data.streak) + "\n" : "") +
                 (data.health && !data.health.ok ? `⚠ ${data.health.problems[0]}\n` : "") +
-                `全库 汉字 ${data.total.cjk.toLocaleString("en-US")} / 词 ${data.total.lat.toLocaleString("en-US")}\n` +
-                `点击打开面板`;
+                t.statusTitleTotal(data.total.cjk.toLocaleString("en-US"), data.total.lat.toLocaleString("en-US")) +
+                "\n" +
+                t.statusTitleClick;
     }
     async buildPanelData() {
         var _a, _b, _c, _d, _e, _f, _g, _h;
@@ -579,17 +834,17 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const path = (0, obsidian_1.normalizePath)(`${folder}/年度报告 ${year}.md`);
         try {
             await this.writeVaultFile(path, content);
-            new obsidian_1.Notice(`年度报告已写入 ${path}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeYear(path));
         }
         catch (err) {
-            new obsidian_1.Notice(`写年度报告失败：${err.message}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeYearFail(err.message));
         }
     }
     async exportCsv() {
         var _a;
         const months = await this.store.listLedgerMonths();
         if (months.length === 0) {
-            new obsidian_1.Notice("账本还是空的，没有可导出的内容。");
+            new obsidian_1.Notice((0, i18n_1.L)().noticeLedgerEmpty);
             return;
         }
         const entries = await this.store.readMonths(months);
@@ -609,10 +864,10 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const path = (0, obsidian_1.normalizePath)(`${folder}/账本导出 ${(0, store_1.dayKey)(Date.now())}.csv`);
         try {
             await this.writeVaultFile(path, (0, report_1.buildCsv)(rows));
-            new obsidian_1.Notice(`已导出 ${rows.length} 天到 ${path}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeCsv(rows.length, path));
         }
         catch (err) {
-            new obsidian_1.Notice(`导出 CSV 失败：${err.message}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeCsvFail(err.message));
         }
     }
     queueFrontmatter(path) {
@@ -653,7 +908,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
             });
         }
         catch (err) {
-            new obsidian_1.Notice(`写入 ${key} 失败：${err.message}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeFmFail(err.message));
             return false;
         }
         return changed;
@@ -718,11 +973,11 @@ class AbacusPlugin extends obsidian_1.Plugin {
         try {
             await this.writeVaultFile(path, content);
             if (notify)
-                new obsidian_1.Notice(`周报已写入 ${path}`);
+                new obsidian_1.Notice((0, i18n_1.L)().noticeWeekly(path));
             return true;
         }
         catch (err) {
-            new obsidian_1.Notice(`写周报失败：${err.message}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeWeeklyFail(err.message));
             return false;
         }
     }
@@ -733,7 +988,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         if (this.app.vault.getAbstractFileByPath(this.reportPath(lastWeek)))
             return;
         if (await this.generateReport(lastWeek, false)) {
-            new obsidian_1.Notice(`上周周报已生成：${this.reportPath(lastWeek)}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeWeekly(this.reportPath(lastWeek)));
         }
     }
     reportPath(weekStart) {
@@ -743,7 +998,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
     async exportLedger() {
         const months = await this.store.listLedgerMonths();
         if (months.length === 0) {
-            new obsidian_1.Notice("账本还是空的，没有可导出的内容。");
+            new obsidian_1.Notice((0, i18n_1.L)().noticeLedgerEmpty);
             return;
         }
         const all = [];
@@ -754,10 +1009,10 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const path = (0, obsidian_1.normalizePath)(`${folder}/账本备份 ${stamp}.json`);
         try {
             await this.writeVaultFile(path, JSON.stringify({ exportedAt: new Date().toISOString(), months, count: all.length, entries: all }));
-            new obsidian_1.Notice(`账本已导出：${path}（${all.length} 条）`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeBackup(path, all.length));
         }
         catch (err) {
-            new obsidian_1.Notice(`导出失败：${err.message}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeBackupFail(err.message));
         }
     }
     async ensureFolder(folder) {
@@ -781,7 +1036,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
     async checkLedgerHealth() {
         if (this.store.repairs.length > 0) {
             const dropped = this.store.repairs.reduce((n, r) => n + r.dropped, 0);
-            new obsidian_1.Notice(`账本末尾发现截断，已丢弃 ${dropped} 个字符的残行后继续记录。`, 8000);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRepair(dropped), 8000);
             this.store.repairs.length = 0;
         }
         await this.refreshHealth();
@@ -808,7 +1063,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const a = await this.store.audit();
         this.setHealth(a);
         if (a.problems.length === 0) {
-            new obsidian_1.Notice(`账本正常：${a.months.length} 个月 · ${a.totalEntries} 条事件`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeAuditOk(a.months.length, a.totalEntries));
             return;
         }
         const lines = [
@@ -831,10 +1086,10 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const path = (0, obsidian_1.normalizePath)(`${folder}/账本体检 ${(0, store_1.dayKey)(Date.now())}.md`);
         try {
             await this.writeVaultFile(path, lines.join("\n"));
-            new obsidian_1.Notice(`账本体检发现 ${a.problems.length} 项问题，已写入 ${path}`, 10000);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeAuditBad(a.problems.length, path), 10000);
         }
         catch (err) {
-            new obsidian_1.Notice(`体检报告写入失败：${err.message}`);
+            new obsidian_1.Notice((0, i18n_1.L)().noticeBackupFail(err.message));
         }
     }
     async activateView() {
@@ -1289,6 +1544,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatsSettingTab = void 0;
 const obsidian_1 = require("obsidian");
 const stats_1 = require("./stats");
+const i18n_1 = require("./i18n");
 class StatsSettingTab extends obsidian_1.PluginSettingTab {
     constructor(app, plugin) {
         super(app, plugin);
@@ -1298,33 +1554,31 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
         const s = this.plugin.settings;
-        containerEl.createEl("h3", { text: "统计口径" });
-        containerEl.createEl("p", {
-            cls: "setting-item-description",
-            text: "改动这里会重建快照（不产生写作记录），已记录的账本不受影响。",
-        });
+        const t = (0, i18n_1.L)();
+        containerEl.createEl("h3", { text: t.sCounter });
+        containerEl.createEl("p", { cls: "setting-item-description", text: t.sCounterDesc });
         new obsidian_1.Setting(containerEl)
-            .setName("计入 YAML frontmatter")
-            .setDesc("默认不计入：属性区是元数据，不是正文。")
-            .addToggle((t) => t.setValue(s.countFrontmatter).onChange(async (v) => {
+            .setName(t.sFrontmatter)
+            .setDesc(t.sFrontmatterDesc)
+            .addToggle((c) => c.setValue(s.countFrontmatter).onChange(async (v) => {
             s.countFrontmatter = v;
             await this.plugin.applySettings(["counter"]);
         }));
         new obsidian_1.Setting(containerEl)
-            .setName("计入代码块与行内代码")
-            .setDesc("默认不计入。")
-            .addToggle((t) => t.setValue(s.countCodeBlocks).onChange(async (v) => {
+            .setName(t.sCode)
+            .setDesc(t.sCodeDesc)
+            .addToggle((c) => c.setValue(s.countCodeBlocks).onChange(async (v) => {
             s.countCodeBlocks = v;
             await this.plugin.applySettings(["counter"]);
         }));
         new obsidian_1.Setting(containerEl)
-            .setName("排除的文件夹")
-            .setDesc("每行一个，相对库根目录；这些目录不扫描、不统计。")
-            .addTextArea((t) => {
-            t.setValue(s.excludeFolders.join("\n"));
-            t.inputEl.rows = 4;
-            t.inputEl.addClass("scs-textarea");
-            t.onChange(async (v) => {
+            .setName(t.sExclude)
+            .setDesc(t.sExcludeDesc)
+            .addTextArea((c) => {
+            c.setValue(s.excludeFolders.join("\n"));
+            c.inputEl.rows = 4;
+            c.inputEl.addClass("scs-textarea");
+            c.onChange(async (v) => {
                 s.excludeFolders = v
                     .split("\n")
                     .map((x) => x.trim())
@@ -1332,78 +1586,63 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
                 await this.plugin.applySettings(["scan"]);
             });
         });
-        containerEl.createEl("h3", { text: "显示" });
+        containerEl.createEl("h3", { text: t.sProps });
+        containerEl.createEl("p", { cls: "setting-item-description", text: t.sPropsDesc });
         new obsidian_1.Setting(containerEl)
-            .setName("主指标包含英文词")
-            .setDesc("关闭时状态栏只看汉字；两个分量在面板里始终分开显示。")
-            .addToggle((t) => t.setValue(s.includeLatinInPrimary).onChange(async (v) => {
-            s.includeLatinInPrimary = v;
-            await this.plugin.applySettings(["display"]);
-        }));
-        containerEl.createEl("h3", { text: "笔记属性" });
-        containerEl.createEl("p", {
-            cls: "setting-item-description",
-            text: "把汉字数写进笔记的 frontmatter，供 Bases / Dataview 排序、筛选、做公式。这会修改你的笔记，所以默认关闭。",
-        });
-        new obsidian_1.Setting(containerEl)
-            .setName("保存时把字数写进属性")
-            .setDesc("只在内容真的变化时写；值没变不会动文件，所以不会触发死循环。")
-            .addToggle((t) => t.setValue(s.writeFrontmatter).onChange(async (v) => {
+            .setName(t.sWriteProp)
+            .setDesc(t.sWritePropDesc)
+            .addToggle((c) => c.setValue(s.writeFrontmatter).onChange(async (v) => {
             s.writeFrontmatter = v;
             await this.plugin.applySettings(["display"]);
         }));
         new obsidian_1.Setting(containerEl)
-            .setName("属性名")
-            .setDesc("默认 words。只写汉字数，英文词去账本里看。")
-            .addText((t) => t
+            .setName(t.sPropKey)
+            .setDesc(t.sPropKeyDesc)
+            .addText((c) => c
             .setPlaceholder("words")
             .setValue(s.frontmatterKey)
             .onChange(async (v) => {
             s.frontmatterKey = v.trim() || "words";
             await this.plugin.applySettings(["display"]);
         }));
-        containerEl.createEl("h3", { text: "目标" });
-        containerEl.createEl("p", {
-            cls: "setting-item-description",
-            text: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
-        });
+        containerEl.createEl("h3", { text: t.sDisplay });
         new obsidian_1.Setting(containerEl)
-            .setName("每日目标（汉字）")
-            .addText((t) => {
+            .setName(t.sLatinPrimary)
+            .setDesc(t.sLatinPrimaryDesc)
+            .addToggle((c) => c.setValue(s.includeLatinInPrimary).onChange(async (v) => {
+            s.includeLatinInPrimary = v;
+            await this.plugin.applySettings(["display"]);
+        }));
+        containerEl.createEl("h3", { text: t.sGoals });
+        containerEl.createEl("p", { cls: "setting-item-description", text: t.sGoalsDesc });
+        new obsidian_1.Setting(containerEl).setName(t.sDailyGoal).addText((c) => {
             var _a;
-            t.inputEl.type = "number";
-            t.setPlaceholder("0")
+            c.inputEl.type = "number";
+            c.setPlaceholder("0")
                 .setValue(String((_a = s.dailyGoal) !== null && _a !== void 0 ? _a : 0))
                 .onChange(async (v) => {
                 s.dailyGoal = Math.max(0, Math.floor(Number(v) || 0));
                 await this.plugin.applySettings(["display"]);
             });
         });
-        new obsidian_1.Setting(containerEl)
-            .setName("每周目标（汉字）")
-            .addText((t) => {
+        new obsidian_1.Setting(containerEl).setName(t.sWeeklyGoal).addText((c) => {
             var _a;
-            t.inputEl.type = "number";
-            t.setPlaceholder("0")
+            c.inputEl.type = "number";
+            c.setPlaceholder("0")
                 .setValue(String((_a = s.weeklyGoal) !== null && _a !== void 0 ? _a : 0))
                 .onChange(async (v) => {
                 s.weeklyGoal = Math.max(0, Math.floor(Number(v) || 0));
                 await this.plugin.applySettings(["display"]);
             });
         });
-        containerEl.createEl("h3", { text: "项目分组" });
-        containerEl.createEl("p", {
-            cls: "setting-item-description",
-            text: "默认按路径前两段分组（创作/小说、归档/日记……）。需要更细的粒度就写规则，每行一条：`名称 = 路径前缀`，或只写路径前缀（名称取末段）。规则按前缀最长优先。",
-        });
-        new obsidian_1.Setting(containerEl)
-            .setName("分组规则")
-            .addTextArea((t) => {
-            t.setPlaceholder("小说1 = 创作/小说/1\n设定集 = 创作/设定集");
-            t.setValue(s.projectRules.join("\n"));
-            t.inputEl.rows = 5;
-            t.inputEl.addClass("scs-textarea");
-            t.onChange(async (v) => {
+        containerEl.createEl("h3", { text: t.sProject });
+        containerEl.createEl("p", { cls: "setting-item-description", text: t.sProjectDesc });
+        new obsidian_1.Setting(containerEl).setName(t.sRules).addTextArea((c) => {
+            c.setPlaceholder("小说1 = 创作/小说/1\n设定集 = 创作/设定集");
+            c.setValue(s.projectRules.join("\n"));
+            c.inputEl.rows = 5;
+            c.inputEl.addClass("scs-textarea");
+            c.onChange(async (v) => {
                 s.projectRules = v
                     .split("\n")
                     .map((x) => x.trim())
@@ -1411,49 +1650,46 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
                 await this.plugin.applySettings(["display"]);
             });
         });
-        containerEl.createEl("h3", { text: "周报" });
+        containerEl.createEl("h3", { text: t.sReport });
         new obsidian_1.Setting(containerEl)
-            .setName("周报目录")
-            .setDesc("生成的周报会写到这里。该目录自动排除在统计之外，否则周报会被算成“今天写的字”。")
-            .addText((t) => t
+            .setName(t.sYearReport)
+            .setDesc(t.sYearReportDesc)
+            .addButton((b) => b.setButtonText(t.sGenerate).onClick(() => void this.plugin.writeYearReport()));
+        new obsidian_1.Setting(containerEl)
+            .setName(t.sCsv)
+            .setDesc(t.sCsvDesc)
+            .addButton((b) => b.setButtonText(t.sExport).onClick(() => void this.plugin.exportCsv()));
+        new obsidian_1.Setting(containerEl)
+            .setName(t.sWeekly)
+            .setDesc(t.sWeeklyDesc)
+            .addButton((b) => b.setButtonText(t.sGenerate).onClick(() => void this.plugin.generateReport((0, stats_1.startOfWeek)(Date.now()), true)));
+        new obsidian_1.Setting(containerEl)
+            .setName(t.sAutoWeekly)
+            .setDesc(t.sAutoWeeklyDesc)
+            .addToggle((c) => c.setValue(s.autoWeeklyReport).onChange(async (v) => {
+            s.autoWeeklyReport = v;
+            await this.plugin.applySettings(["display"]);
+        }));
+        new obsidian_1.Setting(containerEl)
+            .setName(t.sReportFolder)
+            .setDesc(t.sReportFolderDesc)
+            .addText((c) => c
             .setPlaceholder("归档/统计归档")
             .setValue(s.reportFolder)
             .onChange(async (v) => {
             s.reportFolder = v.trim() || "归档/统计归档";
             await this.plugin.applySettings(["scan"]);
         }));
+        containerEl.createEl("h3", { text: t.sData });
+        containerEl.createEl("p", { cls: "setting-item-description", text: t.sDataDesc });
         new obsidian_1.Setting(containerEl)
-            .setName("生成年度报告")
-            .setDesc("含热力图、逐月、项目与文件排行，写入同目录的 `年度报告 YYYY.md`。")
-            .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.writeYearReport()));
+            .setName(t.sRebuild)
+            .addButton((b) => b.setButtonText(t.sRebuildBtn).onClick(() => void this.plugin.rebuild()));
         new obsidian_1.Setting(containerEl)
-            .setName("导出账本 CSV")
-            .setDesc("按天汇总成 CSV，方便在 Excel 或脚本里再分析。")
-            .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportCsv()));
-        new obsidian_1.Setting(containerEl)
-            .setName("生成本周周报")
-            .setDesc("写入 `周报 YYYY-Www.md`，同名会覆盖。")
-            .addButton((b) => b.setButtonText("生成").onClick(() => void this.plugin.generateReport((0, stats_1.startOfWeek)(Date.now()), true)));
-        new obsidian_1.Setting(containerEl)
-            .setName("自动补生成上周周报")
-            .setDesc("每次启动检查一次：上周有写作、但还没有周报文件时自动生成。")
-            .addToggle((t) => t.setValue(s.autoWeeklyReport).onChange(async (v) => {
-            s.autoWeeklyReport = v;
-            await this.plugin.applySettings(["display"]);
-        }));
-        containerEl.createEl("h3", { text: "数据" });
-        containerEl.createEl("p", {
-            cls: "setting-item-description",
-            text: "数据目录：.obsidian/plugins/abacus/stats/。snapshot.json 是存量（可删，会自动重建），ledger/*.jsonl 是按月追加的事件账本——后者删掉就永久丢失。",
-        });
-        new obsidian_1.Setting(containerEl).setName("立即重建快照").addButton((b) => b.setButtonText("重建").onClick(() => void this.plugin.rebuild()));
-        new obsidian_1.Setting(containerEl)
-            .setName("导出账本备份")
-            .setDesc("把账本合并成一个 JSON 写入下面这个目录。账本本体在 .obsidian 里不一定被同步，这份才是异地备份。")
-            .addButton((b) => b.setButtonText("导出").onClick(() => void this.plugin.exportLedger()));
-        new obsidian_1.Setting(containerEl)
-            .setName("账本备份目录")
-            .addText((t) => t
+            .setName(t.sBackup)
+            .setDesc(t.sBackupDesc)
+            .addButton((b) => b.setButtonText(t.sExport).onClick(() => void this.plugin.exportLedger()));
+        new obsidian_1.Setting(containerEl).setName(t.sBackupFolder).addText((c) => c
             .setPlaceholder("归档/统计归档/账本备份")
             .setValue(s.backupFolder)
             .onChange(async (v) => {
@@ -2072,6 +2308,7 @@ __modules["view.ts"] = function (module, exports, require) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatsView = exports.VIEW_TYPE_STATS = void 0;
 const obsidian_1 = require("obsidian");
+const i18n_1 = require("./i18n");
 exports.VIEW_TYPE_STATS = "abacus-view";
 const RANGES = [7, 30];
 const fmt = (n) => Math.round(n).toLocaleString("en-US");
@@ -2085,7 +2322,7 @@ class StatsView extends obsidian_1.ItemView {
         return exports.VIEW_TYPE_STATS;
     }
     getDisplayText() {
-        return "字数统计";
+        return (0, i18n_1.L)().viewName;
     }
     getIcon() {
         return "calculator";
@@ -2102,49 +2339,50 @@ class StatsView extends obsidian_1.ItemView {
     }
     render() {
         var _a, _b, _c;
+        const t = (0, i18n_1.L)();
         const root = this.contentEl;
         root.empty();
         root.addClass("scs-panel");
         const header = root.createDiv({ cls: "scs-header" });
-        header.createDiv({ cls: "scs-title", text: "今日" });
+        header.createDiv({ cls: "scs-title", text: t.today });
         const buttons = header.createDiv({ cls: "scs-header-actions" });
         for (const r of RANGES) {
             const b = buttons.createEl("button", {
                 cls: "scs-range-btn" + (((_a = this.data) === null || _a === void 0 ? void 0 : _a.range) === r ? " is-active" : ""),
-                text: `${r}天`,
+                text: t.rangeDays(r),
             });
             b.onclick = () => this.hooks.onRange(r);
         }
         const refresh = buttons.createEl("button", {
             cls: "scs-icon-btn",
-            attr: { "aria-label": "重新扫描" },
+            attr: { "aria-label": t.rescan },
         });
         (0, obsidian_1.setIcon)(refresh, "refresh-cw");
         refresh.onclick = () => this.hooks.onRescan();
         if (!this.data) {
-            root.createDiv({ cls: "scs-empty", text: "正在读取…" });
+            root.createDiv({ cls: "scs-empty", text: t.reading });
             return;
         }
         const d = this.data;
         if (d.scanning && d.progress) {
             root.createDiv({
                 cls: "scs-progress",
-                text: `扫描中 ${d.progress.done} / ${d.progress.total}`,
+                text: t.scanning(d.progress.done, d.progress.total),
             });
         }
         const hero = root.createDiv({ cls: "scs-hero" });
         hero.createDiv({ cls: "scs-hero-num", text: fmt(d.todayAdd.cjk) });
-        hero.createDiv({ cls: "scs-hero-unit", text: "汉字" });
+        hero.createDiv({ cls: "scs-hero-unit", text: t.cjk });
         const heroSub = root.createDiv({ cls: "scs-hero-sub" });
-        heroSub.createSpan({ text: `英文词 ${fmt(d.todayAdd.lat)}` });
+        heroSub.createSpan({ text: t.latinWords(fmt(d.todayAdd.lat)) });
         if (d.todayDel.cjk > 0 || d.todayDel.lat > 0) {
             heroSub.createSpan({
                 cls: "scs-del",
-                text: `　删改 −${fmt(d.todayDel.cjk)} / −${fmt(d.todayDel.lat)}`,
+                text: t.deleted(fmt(d.todayDel.cjk), fmt(d.todayDel.lat)),
             });
         }
         if (d.streak > 0) {
-            heroSub.createSpan({ cls: "scs-streak", text: `　连续 ${d.streak} 天` });
+            heroSub.createSpan({ cls: "scs-streak", text: t.streak(d.streak) });
         }
         if (d.dailyGoal > 0) {
             const pct = Math.min(100, Math.round((d.todayAdd.cjk / d.dailyGoal) * 100));
@@ -2155,7 +2393,7 @@ class StatsView extends obsidian_1.ItemView {
             track.createDiv({ cls: "scs-goal-fill", attr: { style: `width:${pct}%` } });
             goal.createDiv({
                 cls: "scs-goal-text",
-                text: `${fmt(d.todayAdd.cjk)} / ${fmt(d.dailyGoal)} 字 · ${pct}%`,
+                text: t.goalText(fmt(d.todayAdd.cjk), fmt(d.dailyGoal), pct),
             });
         }
         const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
@@ -2173,41 +2411,43 @@ class StatsView extends obsidian_1.ItemView {
             const showLabel = d.days.length <= 7 || bar.isToday || (d.days.length - 1 - i) % labelEvery === 0;
             if (showLabel)
                 col.createDiv({ cls: "scs-bar-label", text: bar.label });
-            col.title = `${bar.day}　汉字 ${fmt(bar.vec.cjk)}　英文词 ${fmt(bar.vec.lat)}`;
+            col.title = t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
         });
         const grid = root.createDiv({ cls: "scs-grid" });
-        this.metric(grid, "本周", d.weekAdd);
-        this.metric(grid, "本月", d.monthAdd);
-        this.metric(grid, "全库", d.total);
+        this.metric(grid, t.week, d.weekAdd);
+        this.metric(grid, t.month, d.monthAdd);
+        this.metric(grid, t.all, d.total);
         if (d.weeklyGoal > 0) {
             const pct = Math.min(100, Math.round((d.weekAdd.cjk / d.weeklyGoal) * 100));
             const line = root.createDiv({
                 cls: "scs-goal-line" + (d.weekAdd.cjk >= d.weeklyGoal ? " is-done" : ""),
-                text: `本周 ${fmt(d.weekAdd.cjk)} / ${fmt(d.weeklyGoal)} 字 · ${pct}%`,
+                text: t.weekGoalText(fmt(d.weekAdd.cjk), fmt(d.weeklyGoal), pct),
             });
-            line.setAttr("title", `本周目标 ${fmt(d.weeklyGoal)} 汉字`);
+            line.setAttr("title", t.weekGoalTitle(fmt(d.weeklyGoal)));
         }
         if (d.projects.length > 0) {
             const proj = root.createDiv({ cls: "scs-projects" });
-            proj.createDiv({ cls: "scs-section-title", text: "项目" });
+            proj.createDiv({ cls: "scs-section-title", text: t.projects });
             const head = proj.createDiv({ cls: "scs-project-row is-head" });
             head.createDiv({ cls: "scs-project-name", text: "" });
-            head.createDiv({ cls: "scs-project-num", text: "本月" });
-            head.createDiv({ cls: "scs-project-num", text: "累计" });
+            head.createDiv({ cls: "scs-project-num", text: t.month });
+            head.createDiv({ cls: "scs-project-num", text: t.runningTotal });
             for (const p of d.projects) {
                 const selected = d.selectedProject === p.name;
-                const row = proj.createDiv({ cls: "scs-project-row is-clickable" + (selected ? " is-selected" : "") });
+                const row = proj.createDiv({
+                    cls: "scs-project-row is-clickable" + (selected ? " is-selected" : ""),
+                });
                 row.createDiv({ cls: "scs-project-name", text: p.name });
                 row.createDiv({ cls: "scs-project-num", text: fmt(p.month.cjk) });
                 row.createDiv({ cls: "scs-project-num is-dim", text: fmt(p.total.cjk) });
-                row.title = `${p.name}\n本月 汉字 ${fmt(p.month.cjk)} / 词 ${fmt(p.month.lat)}\n累计 汉字 ${fmt(p.total.cjk)} / 词 ${fmt(p.total.lat)}\n点击查看该项目下的文件`;
+                row.title = t.projectTip(p.name, fmt(p.month.cjk), fmt(p.month.lat), fmt(p.total.cjk), fmt(p.total.lat));
                 row.onclick = () => this.hooks.onProject(p.name);
             }
             if (d.selectedProject) {
                 const files = proj.createDiv({ cls: "scs-files" });
                 files.createDiv({ cls: "scs-files-title", text: d.selectedProject });
                 if (d.projectFiles.length === 0) {
-                    files.createDiv({ cls: "scs-files-empty", text: "本月没有改动" });
+                    files.createDiv({ cls: "scs-files-empty", text: t.noChangesThisMonth });
                 }
                 for (const f of d.projectFiles) {
                     const item = files.createDiv({ cls: "scs-file-row" });
@@ -2216,45 +2456,46 @@ class StatsView extends obsidian_1.ItemView {
                         cls: "scs-file-num",
                         text: f.month.cjk > 0 ? `+${fmt(f.month.cjk)}` : fmt(f.total.cjk),
                     });
-                    item.title = `${f.path}\n本月新增 汉字 ${fmt(f.month.cjk)} / 词 ${fmt(f.month.lat)}\n全文 汉字 ${fmt(f.total.cjk)} / 词 ${fmt(f.total.lat)}`;
+                    item.title = t.fileTip(f.path, fmt(f.month.cjk), fmt(f.month.lat), fmt(f.total.cjk), fmt(f.total.lat));
                 }
             }
         }
         if (d.current) {
             const cur = root.createDiv({ cls: "scs-current" });
-            cur.createDiv({ cls: "scs-current-label", text: "当前文件" });
-            cur.createDiv({ cls: "scs-current-name", text: (_c = d.current.path.split("/").pop()) !== null && _c !== void 0 ? _c : d.current.path });
+            cur.createDiv({ cls: "scs-current-label", text: t.currentFile });
+            cur.createDiv({
+                cls: "scs-current-name",
+                text: (_c = d.current.path.split("/").pop()) !== null && _c !== void 0 ? _c : d.current.path,
+            });
             cur.createDiv({
                 cls: "scs-current-num",
-                text: `汉字 ${fmt(d.current.vec.cjk)}　英文词 ${fmt(d.current.vec.lat)}`,
+                text: t.currentNum(fmt(d.current.vec.cjk), fmt(d.current.vec.lat)),
             });
         }
         const healthEl = root.createDiv({ cls: "scs-health" });
         if (!d.health) {
-            healthEl.setText("账本检查中…");
+            healthEl.setText(t.healthChecking);
         }
         else if (d.health.ok) {
-            healthEl.setText(`账本正常 · ${d.health.months} 个月 · ${fmt(d.health.entries)} 条`);
+            healthEl.setText(t.healthOk(d.health.months, fmt(d.health.entries)));
         }
         else {
             healthEl.addClass("is-bad");
-            healthEl.setText(`⚠ 账本异常 ${d.health.problems.length} 项 · 点击排查`);
+            healthEl.setText(t.healthBad(d.health.problems.length));
             healthEl.title = d.health.problems.join("\n");
         }
         healthEl.onclick = () => this.hooks.onAudit();
-        root.createDiv({
-            cls: "scs-foot",
-            text: `${fmt(d.fileCount)} 个文件　更新于 ${new Date(d.updatedAt).toLocaleTimeString("zh-CN", {
-                hour: "2-digit",
-                minute: "2-digit",
-            })}`,
+        const time = new Date(d.updatedAt).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
         });
+        root.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
     }
     metric(parent, label, v) {
         const box = parent.createDiv({ cls: "scs-metric" });
         box.createDiv({ cls: "scs-metric-label", text: label });
         box.createDiv({ cls: "scs-metric-main", text: fmt(v.cjk) });
-        box.createDiv({ cls: "scs-metric-sub", text: `词 ${fmt(v.lat)}` });
+        box.createDiv({ cls: "scs-metric-sub", text: (0, i18n_1.L)().wordsShort(fmt(v.lat)) });
     }
 }
 exports.StatsView = StatsView;

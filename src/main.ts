@@ -2,6 +2,7 @@ import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } fr
 import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "./types";
 import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
 import { StatsStore, dayKey, monthKey, type LedgerAudit } from "./store";
+import { detectLang, L, setLang } from "./i18n";
 import { Scanner } from "./scanner";
 import { StatsView, VIEW_TYPE_STATS, type DayBar, type HealthInfo, type PanelData, type ProjectFileRow, type ProjectRow } from "./view";
 import { StatsSettingTab, type SettingsDirtyKind } from "./settings";
@@ -76,6 +77,7 @@ export default class AbacusPlugin extends Plugin {
   private fmTimer: number | null = null;
 
   async onload(): Promise<void> {
+    setLang(detectLang());
     await this.loadSettings();
 
     const baseDir = this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`;
@@ -120,61 +122,61 @@ export default class AbacusPlugin extends Plugin {
 
     this.statusBar = this.addStatusBarItem();
     this.statusBar.addClass("scs-statusbar");
-    this.statusBar.setText("统计中…");
+    this.statusBar.setText(L().reading);
     this.statusBar.onclick = () => void this.activateView();
-    this.statusBar.title = "点击打开字数统计面板";
+    this.statusBar.title = L().statusTitleClick;
 
-    this.addRibbonIcon("calculator", "字数统计", () => void this.activateView());
+    this.addRibbonIcon("calculator", L().viewName, () => void this.activateView());
 
-    this.addCommand({ id: "open-panel", name: "打开统计面板", callback: () => void this.activateView() });
-    this.addCommand({ id: "rebuild", name: "重建全库快照", callback: () => void this.rebuild() });
+    this.addCommand({ id: "open-panel", name: L().cmdOpen, callback: () => void this.activateView() });
+    this.addCommand({ id: "rebuild", name: L().cmdRebuild, callback: () => void this.rebuild() });
     this.addCommand({
       id: "weekly-report",
-      name: "生成本周周报",
+      name: L().cmdWeekly,
       callback: () => void this.generateReport(startOfWeek(Date.now()), true),
     });
     this.addCommand({
       id: "weekly-report-last",
-      name: "补生成上周周报",
+      name: L().cmdWeeklyLast,
       callback: () => void this.generateReport(addDays(startOfWeek(Date.now()), -7), true),
     });
     this.addCommand({
       id: "export-ledger",
-      name: "导出账本备份",
+      name: L().cmdBackup,
       callback: () => void this.exportLedger(),
     });
     this.addCommand({
       id: "year-report",
-      name: "生成年度报告",
+      name: L().cmdYear,
       callback: () => void this.writeYearReport(),
     });
     this.addCommand({
       id: "export-csv",
-      name: "导出账本 CSV",
+      name: L().cmdCsv,
       callback: () => void this.exportCsv(),
     });
     this.addCommand({
       id: "sync-frontmatter",
-      name: "把字数写入当前笔记属性",
+      name: L().cmdSyncFm,
       callback: async () => {
         const file = this.app.workspace.getActiveFile();
         if (!file) {
-          new Notice("没有打开的笔记。");
+          new Notice(L().noticeNoFile);
           return;
         }
         const rec = this.store.get(file.path);
         if (!rec) {
-          new Notice("这篇还没统计到，先保存一次。");
+          new Notice(L().noticeNotCounted);
           return;
         }
         const key = this.settings.frontmatterKey || "words";
         const changed = await this.syncFrontmatter(file.path, true);
-        new Notice(changed ? `已写入 ${key}: ${rec.vec.cjk}` : `${key} 已经是最新（${rec.vec.cjk}）`);
+        new Notice(changed ? L().noticeFmWritten(key, rec.vec.cjk) : L().noticeFmLatest(key, rec.vec.cjk));
       },
     });
     this.addCommand({
       id: "audit-ledger",
-      name: "检查账本完整性",
+      name: L().cmdAudit,
       callback: () => void this.auditLedger(),
     });
 
@@ -220,7 +222,7 @@ export default class AbacusPlugin extends Plugin {
     const res = await this.scanner.fullScan(false);
     this.progress = null;
     if (res.baseline && res.files > 0) {
-      new Notice(`已建立快照：${res.files} 个文件。从今天起开始记账。`);
+      new Notice(L().noticeBaseline(res.files));
     }
     await this.refresh();
     void this.autoWeeklyReport();
@@ -228,13 +230,13 @@ export default class AbacusPlugin extends Plugin {
   }
 
   async rebuild(): Promise<void> {
-    new Notice("正在重建快照…");
+    new Notice(L().noticeRebuilding);
     this.store.clear();
     const res = await this.scanner.fullScan(true);
     this.invalidate();
     this.progress = null;
     await this.refresh();
-    new Notice(`快照已重建：${res.files} 个文件。账本未改动。`);
+    new Notice(L().noticeRebuilt(res.files));
   }
 
   async setRange(days: number): Promise<void> {
@@ -279,19 +281,26 @@ export default class AbacusPlugin extends Plugin {
 
   private updateStatusBar(data: PanelData): void {
     if (!this.statusBar) return;
+    const t = L();
     const today = data.todayAdd.cjk + data.todayAdd.lat;
     const warn = data.health && !data.health.ok ? " ⚠" : "";
-    this.statusBar.setText(
-      (today === 0
-        ? "今日 +0"
-        : `今日 +${data.todayAdd.cjk.toLocaleString("en-US")}字 +${data.todayAdd.lat.toLocaleString("en-US")}词`) + warn
-    );
+    const c = data.todayAdd.cjk.toLocaleString("en-US");
+    const l = data.todayAdd.lat.toLocaleString("en-US");
+    this.statusBar.setText((today === 0 ? t.statusTodayZero : t.statusToday(c, l)) + warn);
     this.statusBar.title =
-      `本周 汉字 ${data.weekAdd.cjk.toLocaleString("en-US")} / 词 ${data.weekAdd.lat.toLocaleString("en-US")}\n` +
-      (data.streak > 0 ? `连续 ${data.streak} 天\n` : "") +
+      t.statusTitleWeek(
+        data.weekAdd.cjk.toLocaleString("en-US"),
+        data.weekAdd.lat.toLocaleString("en-US")
+      ) +
+      "\n" +
+      (data.streak > 0 ? t.statusTitleStreak(data.streak) + "\n" : "") +
       (data.health && !data.health.ok ? `⚠ ${data.health.problems[0]}\n` : "") +
-      `全库 汉字 ${data.total.cjk.toLocaleString("en-US")} / 词 ${data.total.lat.toLocaleString("en-US")}\n` +
-      `点击打开面板`;
+      t.statusTitleTotal(
+        data.total.cjk.toLocaleString("en-US"),
+        data.total.lat.toLocaleString("en-US")
+      ) +
+      "\n" +
+      t.statusTitleClick;
   }
 
   private async buildPanelData(): Promise<PanelData> {
@@ -549,9 +558,9 @@ export default class AbacusPlugin extends Plugin {
     const path = normalizePath(`${folder}/年度报告 ${year}.md`);
     try {
       await this.writeVaultFile(path, content);
-      new Notice(`年度报告已写入 ${path}`);
+      new Notice(L().noticeYear(path));
     } catch (err) {
-      new Notice(`写年度报告失败：${(err as Error).message}`);
+      new Notice(L().noticeYearFail((err as Error).message));
     }
   }
 
@@ -560,7 +569,7 @@ export default class AbacusPlugin extends Plugin {
   async exportCsv(): Promise<void> {
     const months = await this.store.listLedgerMonths();
     if (months.length === 0) {
-      new Notice("账本还是空的，没有可导出的内容。");
+      new Notice(L().noticeLedgerEmpty);
       return;
     }
     const entries = await this.store.readMonths(months);
@@ -581,9 +590,9 @@ export default class AbacusPlugin extends Plugin {
     const path = normalizePath(`${folder}/账本导出 ${dayKey(Date.now())}.csv`);
     try {
       await this.writeVaultFile(path, buildCsv(rows));
-      new Notice(`已导出 ${rows.length} 天到 ${path}`);
+      new Notice(L().noticeCsv(rows.length, path));
     } catch (err) {
-      new Notice(`导出 CSV 失败：${(err as Error).message}`);
+      new Notice(L().noticeCsvFail((err as Error).message));
     }
   }
 
@@ -630,7 +639,7 @@ export default class AbacusPlugin extends Plugin {
         }
       });
     } catch (err) {
-      new Notice(`写入 ${key} 失败：${(err as Error).message}`);
+      new Notice(L().noticeFmFail((err as Error).message));
       return false;
     }
     return changed;
@@ -701,10 +710,10 @@ export default class AbacusPlugin extends Plugin {
     const path = this.reportPath(weekStart);
     try {
       await this.writeVaultFile(path, content);
-      if (notify) new Notice(`周报已写入 ${path}`);
+      if (notify) new Notice(L().noticeWeekly(path));
       return true;
     } catch (err) {
-      new Notice(`写周报失败：${(err as Error).message}`);
+      new Notice(L().noticeWeeklyFail((err as Error).message));
       return false;
     }
   }
@@ -715,7 +724,7 @@ export default class AbacusPlugin extends Plugin {
     const lastWeek = addDays(startOfWeek(Date.now()), -7);
     if (this.app.vault.getAbstractFileByPath(this.reportPath(lastWeek))) return;
     if (await this.generateReport(lastWeek, false)) {
-      new Notice(`上周周报已生成：${this.reportPath(lastWeek)}`);
+      new Notice(L().noticeWeekly(this.reportPath(lastWeek)));
     }
   }
 
@@ -732,7 +741,7 @@ export default class AbacusPlugin extends Plugin {
   async exportLedger(): Promise<void> {
     const months = await this.store.listLedgerMonths();
     if (months.length === 0) {
-      new Notice("账本还是空的，没有可导出的内容。");
+      new Notice(L().noticeLedgerEmpty);
       return;
     }
     const all: LedgerEntry[] = [];
@@ -746,9 +755,9 @@ export default class AbacusPlugin extends Plugin {
         path,
         JSON.stringify({ exportedAt: new Date().toISOString(), months, count: all.length, entries: all })
       );
-      new Notice(`账本已导出：${path}（${all.length} 条）`);
+      new Notice(L().noticeBackup(path, all.length));
     } catch (err) {
-      new Notice(`导出失败：${(err as Error).message}`);
+      new Notice(L().noticeBackupFail((err as Error).message));
     }
   }
 
@@ -775,7 +784,7 @@ export default class AbacusPlugin extends Plugin {
   private async checkLedgerHealth(): Promise<void> {
     if (this.store.repairs.length > 0) {
       const dropped = this.store.repairs.reduce((n, r) => n + r.dropped, 0);
-      new Notice(`账本末尾发现截断，已丢弃 ${dropped} 个字符的残行后继续记录。`, 8000);
+      new Notice(L().noticeRepair(dropped), 8000);
       this.store.repairs.length = 0;
     }
 
@@ -807,7 +816,7 @@ export default class AbacusPlugin extends Plugin {
     const a = await this.store.audit();
     this.setHealth(a);
     if (a.problems.length === 0) {
-      new Notice(`账本正常：${a.months.length} 个月 · ${a.totalEntries} 条事件`);
+      new Notice(L().noticeAuditOk(a.months.length, a.totalEntries));
       return;
     }
 
@@ -832,9 +841,9 @@ export default class AbacusPlugin extends Plugin {
     const path = normalizePath(`${folder}/账本体检 ${dayKey(Date.now())}.md`);
     try {
       await this.writeVaultFile(path, lines.join("\n"));
-      new Notice(`账本体检发现 ${a.problems.length} 项问题，已写入 ${path}`, 10000);
+      new Notice(L().noticeAuditBad(a.problems.length, path), 10000);
     } catch (err) {
-      new Notice(`体检报告写入失败：${(err as Error).message}`);
+      new Notice(L().noticeBackupFail((err as Error).message));
     }
   }
 

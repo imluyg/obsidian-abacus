@@ -1,4 +1,4 @@
-﻿import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting } from "obsidian";
 import type SixColorStats from "./main";
 import type { StatsSettings } from "./types";
 import { startOfWeek } from "./stats";

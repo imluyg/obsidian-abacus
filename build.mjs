@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 打包脚本（零原生依赖）。
  *
  * 为什么不用 esbuild：esbuild 要 spawn 一个子进程并通过管道通信，
@@ -29,6 +29,18 @@ if (readResult.error) {
   process.exit(1);
 }
 const parsed = ts.parseJsonConfigFileContent(readResult.config, ts.sys, root);
+
+/* ----------------------------- BOM 自检 ----------------------------- */
+
+// manifest.json 开头若有 UTF-8 BOM，Obsidian 的 JSON.parse 会失败，
+// 而失败是静默的：插件看着装着，却永远不会加载。踩过一次，这里拦住。
+const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+const manifestBuf = fs.readFileSync(path.join(root, "manifest.json"));
+if (manifestBuf.length >= 3 && manifestBuf.subarray(0, 3).equals(BOM)) {
+  console.error("manifest.json 带 UTF-8 BOM，Obsidian 会静默拒绝加载。");
+  console.error("请用无 BOM 的 UTF-8 重写（Windows PowerShell 5.1 的 -Encoding utf8 会加 BOM）。");
+  process.exit(1);
+}
 
 /* ----------------------------- 类型检查 ----------------------------- */
 

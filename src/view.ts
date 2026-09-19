@@ -1,4 +1,4 @@
-﻿import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import type { Vec } from "./types";
 
 export const VIEW_TYPE_STATS = "sixcolor-stats-view";

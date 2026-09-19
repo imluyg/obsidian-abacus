@@ -1,4 +1,4 @@
-﻿import type { LedgerEntry, StatsAdapter, Vec } from "./types";
+import type { LedgerEntry, StatsAdapter, Vec } from "./types";
 import { isZeroVec, vec, ZERO } from "./types";
 
 /**

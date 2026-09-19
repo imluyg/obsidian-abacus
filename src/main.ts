@@ -1,4 +1,4 @@
-﻿import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
+import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "./types";
 import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
 import { StatsStore, dayKey, monthKey, type LedgerAudit } from "./store";

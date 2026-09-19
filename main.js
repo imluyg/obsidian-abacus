@@ -144,6 +144,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         this.progress = null;
         this.streakCache = null;
         this.health = null;
+        this.selectedProject = null;
     }
     async onload() {
         var _a;
@@ -177,6 +178,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
             onRescan: () => void this.rebuild(),
             onRange: (days) => void this.setRange(days),
             onAudit: () => void this.auditLedger(),
+            onProject: (name) => void this.selectProject(name),
         }));
         this.statusBar = this.addStatusBarItem();
         this.statusBar.addClass("scs-statusbar");
@@ -308,7 +310,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
                 `点击打开面板`;
     }
     async buildPanelData() {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const now = Date.now();
         const range = this.settings.panelRange === 30 ? 30 : 7;
         const chartFrom = (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(range - 1));
@@ -343,9 +345,13 @@ class AbacusPlugin extends obsidian_1.Plugin {
             range,
             streak: await this.computeStreak(),
             projects: this.buildProjects(entries, now),
-            health: (_b = this.health) !== null && _b !== void 0 ? _b : undefined,
-            scanning: (_d = (_c = this.scanner) === null || _c === void 0 ? void 0 : _c.isScanning) !== null && _d !== void 0 ? _d : false,
-            progress: (_e = this.progress) !== null && _e !== void 0 ? _e : undefined,
+            dailyGoal: (_b = this.settings.dailyGoal) !== null && _b !== void 0 ? _b : 0,
+            weeklyGoal: (_c = this.settings.weeklyGoal) !== null && _c !== void 0 ? _c : 0,
+            projectFiles: this.buildProjectFiles(entries, now),
+            selectedProject: (_d = this.selectedProject) !== null && _d !== void 0 ? _d : undefined,
+            health: (_e = this.health) !== null && _e !== void 0 ? _e : undefined,
+            scanning: (_g = (_f = this.scanner) === null || _f === void 0 ? void 0 : _f.isScanning) !== null && _g !== void 0 ? _g : false,
+            progress: (_h = this.progress) !== null && _h !== void 0 ? _h : undefined,
             updatedAt: now,
         };
     }
@@ -375,10 +381,54 @@ class AbacusPlugin extends obsidian_1.Plugin {
             if (!stock.has(name))
                 rows.push({ name, month, total: (0, types_1.vec)(0, 0) });
         }
-        return rows
+        const top = rows
             .filter((r) => !(0, types_1.isZeroVec)(r.total) || !(0, types_1.isZeroVec)(r.month))
             .sort((a, b) => b.month.cjk - a.month.cjk || b.total.cjk - a.total.cjk)
             .slice(0, TOP_PROJECTS);
+        if (this.selectedProject && !top.some((r) => r.name === this.selectedProject)) {
+            this.selectedProject = null;
+        }
+        return top;
+    }
+    async selectProject(name) {
+        this.selectedProject = this.selectedProject === name ? null : name;
+        await this.refresh();
+    }
+    buildProjectFiles(entries, now) {
+        var _a;
+        const project = this.selectedProject;
+        if (!project)
+            return [];
+        const rules = (0, stats_1.parseProjectRules)(this.settings.projectRules);
+        const monthFrom = (0, stats_1.startOfMonth)(now);
+        const flow = new Map();
+        for (const e of entries) {
+            if (e.t < monthFrom || e.t > now)
+                continue;
+            if (!(0, stats_1.isWritingEntry)(e))
+                continue;
+            if ((0, stats_1.projectOf)(e.p, rules) !== project)
+                continue;
+            flow.set(e.p, (0, types_1.addVec)((_a = flow.get(e.p)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0), (0, types_1.vec)(e.add[0], e.add[1])));
+        }
+        const rows = [...flow.entries()].map(([path, v]) => {
+            var _a, _b;
+            return ({
+                path,
+                month: v,
+                total: (_b = (_a = this.store.get(path)) === null || _a === void 0 ? void 0 : _a.vec) !== null && _b !== void 0 ? _b : (0, types_1.vec)(0, 0),
+            });
+        });
+        if (rows.length === 0) {
+            for (const [path, rec] of this.store.entries()) {
+                if ((0, stats_1.projectOf)(path, rules) !== project)
+                    continue;
+                rows.push({ path, month: (0, types_1.vec)(0, 0), total: rec.vec });
+            }
+        }
+        return rows
+            .sort((a, b) => b.month.cjk - a.month.cjk || b.total.cjk - a.total.cjk)
+            .slice(0, 6);
     }
     async computeStreak() {
         const now = Date.now();
@@ -423,7 +473,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         return out;
     }
     async generateReport(weekStart, notify) {
-        var _a, _b, _c;
+        var _a, _b, _c, _d;
         const weekEnd = (0, stats_1.addDays)(weekStart, 7);
         const entries = await this.readMonths((0, stats_1.monthsBetween)(weekStart, weekEnd));
         const rules = (0, stats_1.parseProjectRules)(this.settings.projectRules);
@@ -438,6 +488,8 @@ class AbacusPlugin extends obsidian_1.Plugin {
                 activeDays++;
             daily.push({ date: key, weekday: (0, stats_1.weekdayCN)(ts), vec: v });
         }
+        const goal = (_b = this.settings.dailyGoal) !== null && _b !== void 0 ? _b : 0;
+        const goalDays = goal > 0 ? daily.filter((d) => d.vec.cjk >= goal).length : 0;
         const weekSum = (0, stats_1.sumWriting)(entries, weekStart, weekEnd);
         const weekDel = (0, stats_1.sumDeletions)(entries, weekStart, weekEnd).del;
         if (weekSum.add.cjk + weekSum.add.lat + weekDel.cjk + weekDel.lat === 0)
@@ -449,8 +501,8 @@ class AbacusPlugin extends obsidian_1.Plugin {
                 continue;
             const v = (0, types_1.vec)(e.add[0], e.add[1]);
             const p = (0, stats_1.projectOf)(e.p, rules);
-            projMap.set(p, (0, types_1.addVec)((_b = projMap.get(p)) !== null && _b !== void 0 ? _b : (0, types_1.vec)(0, 0), v));
-            fileMap.set(e.p, (0, types_1.addVec)((_c = fileMap.get(e.p)) !== null && _c !== void 0 ? _c : (0, types_1.vec)(0, 0), v));
+            projMap.set(p, (0, types_1.addVec)((_c = projMap.get(p)) !== null && _c !== void 0 ? _c : (0, types_1.vec)(0, 0), v));
+            fileMap.set(e.p, (0, types_1.addVec)((_d = fileMap.get(e.p)) !== null && _d !== void 0 ? _d : (0, types_1.vec)(0, 0), v));
         }
         const projects = [...projMap.entries()]
             .map(([name, v]) => ({ name, vec: v }))
@@ -466,6 +518,8 @@ class AbacusPlugin extends obsidian_1.Plugin {
             add: weekSum.add,
             del: weekDel,
             activeDays,
+            goalDays,
+            dailyGoal: goal,
             streak: await this.computeStreak(),
             total: this.store.total(),
             fileCount: this.store.size(),
@@ -662,6 +716,8 @@ function buildWeeklyReport(i) {
     lines.push(`| 本周删改 | −${n(i.del.cjk)} | −${n(i.del.lat)} |`);
     lines.push(`| 净增长 | ${n(i.add.cjk - i.del.cjk)} | ${n(i.add.lat - i.del.lat)} |`);
     lines.push(`| 活跃天数 | ${i.activeDays} / ${i.daily.length} | |`);
+    if (i.dailyGoal > 0)
+        lines.push(`| 达标天数（≥${n(i.dailyGoal)}字） | ${i.goalDays} / ${i.daily.length} | |`);
     lines.push(`| 连续写作 | ${i.streak} 天 | |`);
     lines.push(`| 全库存量 | ${n(i.total.cjk)} | ${n(i.total.lat)} |`);
     lines.push("");
@@ -979,6 +1035,35 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
             s.includeLatinInPrimary = v;
             await this.plugin.applySettings(["display"]);
         }));
+        containerEl.createEl("h3", { text: "目标" });
+        containerEl.createEl("p", {
+            cls: "setting-item-description",
+            text: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
+        });
+        new obsidian_1.Setting(containerEl)
+            .setName("每日目标（汉字）")
+            .addText((t) => {
+            var _a;
+            t.inputEl.type = "number";
+            t.setPlaceholder("0")
+                .setValue(String((_a = s.dailyGoal) !== null && _a !== void 0 ? _a : 0))
+                .onChange(async (v) => {
+                s.dailyGoal = Math.max(0, Math.floor(Number(v) || 0));
+                await this.plugin.applySettings(["display"]);
+            });
+        });
+        new obsidian_1.Setting(containerEl)
+            .setName("每周目标（汉字）")
+            .addText((t) => {
+            var _a;
+            t.inputEl.type = "number";
+            t.setPlaceholder("0")
+                .setValue(String((_a = s.weeklyGoal) !== null && _a !== void 0 ? _a : 0))
+                .onChange(async (v) => {
+                s.weeklyGoal = Math.max(0, Math.floor(Number(v) || 0));
+                await this.plugin.applySettings(["display"]);
+            });
+        });
         containerEl.createEl("h3", { text: "项目分组" });
         containerEl.createEl("p", {
             cls: "setting-item-description",
@@ -1628,6 +1713,8 @@ exports.DEFAULT_SETTINGS = {
     countCodeBlocks: false,
     excludeFolders: [".trash"],
     includeLatinInPrimary: false,
+    dailyGoal: 0,
+    weeklyGoal: 0,
     panelRange: 7,
     debounceMs: 2500,
     projectRules: [],
@@ -1677,7 +1764,7 @@ class StatsView extends obsidian_1.ItemView {
         this.render();
     }
     render() {
-        var _a, _b;
+        var _a, _b, _c;
         const root = this.contentEl;
         root.empty();
         root.addClass("scs-panel");
@@ -1722,6 +1809,18 @@ class StatsView extends obsidian_1.ItemView {
         if (d.streak > 0) {
             heroSub.createSpan({ cls: "scs-streak", text: `　连续 ${d.streak} 天` });
         }
+        if (d.dailyGoal > 0) {
+            const pct = Math.min(100, Math.round((d.todayAdd.cjk / d.dailyGoal) * 100));
+            const goal = root.createDiv({ cls: "scs-goal" });
+            if (d.todayAdd.cjk >= d.dailyGoal)
+                goal.addClass("is-done");
+            const track = goal.createDiv({ cls: "scs-goal-track" });
+            track.createDiv({ cls: "scs-goal-fill", attr: { style: `width:${pct}%` } });
+            goal.createDiv({
+                cls: "scs-goal-text",
+                text: `${fmt(d.todayAdd.cjk)} / ${fmt(d.dailyGoal)} 字 · ${pct}%`,
+            });
+        }
         const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
         const chart = chartWrap.createDiv({ cls: "scs-chart" });
         const max = Math.max(1, ...d.days.map((x) => x.vec.cjk + x.vec.lat));
@@ -1743,6 +1842,14 @@ class StatsView extends obsidian_1.ItemView {
         this.metric(grid, "本周", d.weekAdd);
         this.metric(grid, "本月", d.monthAdd);
         this.metric(grid, "全库", d.total);
+        if (d.weeklyGoal > 0) {
+            const pct = Math.min(100, Math.round((d.weekAdd.cjk / d.weeklyGoal) * 100));
+            const line = root.createDiv({
+                cls: "scs-goal-line" + (d.weekAdd.cjk >= d.weeklyGoal ? " is-done" : ""),
+                text: `本周 ${fmt(d.weekAdd.cjk)} / ${fmt(d.weeklyGoal)} 字 · ${pct}%`,
+            });
+            line.setAttr("title", `本周目标 ${fmt(d.weeklyGoal)} 汉字`);
+        }
         if (d.projects.length > 0) {
             const proj = root.createDiv({ cls: "scs-projects" });
             proj.createDiv({ cls: "scs-section-title", text: "项目" });
@@ -1751,17 +1858,35 @@ class StatsView extends obsidian_1.ItemView {
             head.createDiv({ cls: "scs-project-num", text: "本月" });
             head.createDiv({ cls: "scs-project-num", text: "累计" });
             for (const p of d.projects) {
-                const row = proj.createDiv({ cls: "scs-project-row" });
+                const selected = d.selectedProject === p.name;
+                const row = proj.createDiv({ cls: "scs-project-row is-clickable" + (selected ? " is-selected" : "") });
                 row.createDiv({ cls: "scs-project-name", text: p.name });
                 row.createDiv({ cls: "scs-project-num", text: fmt(p.month.cjk) });
                 row.createDiv({ cls: "scs-project-num is-dim", text: fmt(p.total.cjk) });
-                row.title = `${p.name}\n本月 汉字 ${fmt(p.month.cjk)} / 词 ${fmt(p.month.lat)}\n累计 汉字 ${fmt(p.total.cjk)} / 词 ${fmt(p.total.lat)}`;
+                row.title = `${p.name}\n本月 汉字 ${fmt(p.month.cjk)} / 词 ${fmt(p.month.lat)}\n累计 汉字 ${fmt(p.total.cjk)} / 词 ${fmt(p.total.lat)}\n点击查看该项目下的文件`;
+                row.onclick = () => this.hooks.onProject(p.name);
+            }
+            if (d.selectedProject) {
+                const files = proj.createDiv({ cls: "scs-files" });
+                files.createDiv({ cls: "scs-files-title", text: d.selectedProject });
+                if (d.projectFiles.length === 0) {
+                    files.createDiv({ cls: "scs-files-empty", text: "本月没有改动" });
+                }
+                for (const f of d.projectFiles) {
+                    const item = files.createDiv({ cls: "scs-file-row" });
+                    item.createDiv({ cls: "scs-file-name", text: (_b = f.path.split("/").pop()) !== null && _b !== void 0 ? _b : f.path });
+                    item.createDiv({
+                        cls: "scs-file-num",
+                        text: f.month.cjk > 0 ? `+${fmt(f.month.cjk)}` : fmt(f.total.cjk),
+                    });
+                    item.title = `${f.path}\n本月新增 汉字 ${fmt(f.month.cjk)} / 词 ${fmt(f.month.lat)}\n全文 汉字 ${fmt(f.total.cjk)} / 词 ${fmt(f.total.lat)}`;
+                }
             }
         }
         if (d.current) {
             const cur = root.createDiv({ cls: "scs-current" });
             cur.createDiv({ cls: "scs-current-label", text: "当前文件" });
-            cur.createDiv({ cls: "scs-current-name", text: (_b = d.current.path.split("/").pop()) !== null && _b !== void 0 ? _b : d.current.path });
+            cur.createDiv({ cls: "scs-current-name", text: (_c = d.current.path.split("/").pop()) !== null && _c !== void 0 ? _c : d.current.path });
             cur.createDiv({
                 cls: "scs-current-num",
                 text: `汉字 ${fmt(d.current.vec.cjk)}　英文词 ${fmt(d.current.vec.lat)}`,

@@ -3,7 +3,7 @@ import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, V
 import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
 import { StatsStore, dayKey, monthKey, type LedgerAudit } from "./store";
 import { Scanner } from "./scanner";
-import { StatsView, VIEW_TYPE_STATS, type DayBar, type HealthInfo, type PanelData, type ProjectRow } from "./view";
+import { StatsView, VIEW_TYPE_STATS, type DayBar, type HealthInfo, type PanelData, type ProjectFileRow, type ProjectRow } from "./view";
 import { StatsSettingTab, type SettingsDirtyKind } from "./settings";
 import {
   addDays,
@@ -61,6 +61,8 @@ export default class AbacusPlugin extends Plugin {
   private progress: { done: number; total: number } | null = null;
   private streakCache: { at: number; value: number } | null = null;
   private health: HealthInfo | null = null;
+  /** 面板里当前展开的项目（null = 未展开） */
+  private selectedProject: string | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -100,6 +102,7 @@ export default class AbacusPlugin extends Plugin {
           onRescan: () => void this.rebuild(),
           onRange: (days) => void this.setRange(days),
           onAudit: () => void this.auditLedger(),
+          onProject: (name) => void this.selectProject(name),
         })
     );
 
@@ -289,6 +292,10 @@ export default class AbacusPlugin extends Plugin {
       range,
       streak: await this.computeStreak(),
       projects: this.buildProjects(entries, now),
+      dailyGoal: this.settings.dailyGoal ?? 0,
+      weeklyGoal: this.settings.weeklyGoal ?? 0,
+      projectFiles: this.buildProjectFiles(entries, now),
+      selectedProject: this.selectedProject ?? undefined,
       health: this.health ?? undefined,
       scanning: this.scanner?.isScanning ?? false,
       progress: this.progress ?? undefined,
@@ -323,10 +330,56 @@ export default class AbacusPlugin extends Plugin {
       if (!stock.has(name)) rows.push({ name, month, total: vec(0, 0) });
     }
 
-    return rows
+    const top = rows
       .filter((r) => !isZeroVec(r.total) || !isZeroVec(r.month))
       .sort((a, b) => b.month.cjk - a.month.cjk || b.total.cjk - a.total.cjk)
       .slice(0, TOP_PROJECTS);
+
+    // 选中的项目如果已经不在榜上（改了分组规则、或清空了），自动收起
+    if (this.selectedProject && !top.some((r) => r.name === this.selectedProject)) {
+      this.selectedProject = null;
+    }
+    return top;
+  }
+
+  /** 展开/收起某个项目下的文件；再点一次收起 */
+  async selectProject(name: string): Promise<void> {
+    this.selectedProject = this.selectedProject === name ? null : name;
+    await this.refresh();
+  }
+
+  /** 某个项目下本月新增最多的几个文件 */
+  private buildProjectFiles(entries: LedgerEntry[], now: number): ProjectFileRow[] {
+    const project = this.selectedProject;
+    if (!project) return [];
+    const rules = parseProjectRules(this.settings.projectRules);
+    const monthFrom = startOfMonth(now);
+
+    const flow = new Map<string, Vec>();
+    for (const e of entries) {
+      if (e.t < monthFrom || e.t > now) continue;
+      if (!isWritingEntry(e)) continue;
+      if (projectOf(e.p, rules) !== project) continue;
+      flow.set(e.p, addVec(flow.get(e.p) ?? vec(0, 0), vec(e.add[0], e.add[1])));
+    }
+
+    const rows: ProjectFileRow[] = [...flow.entries()].map(([path, v]) => ({
+      path,
+      month: v,
+      total: this.store.get(path)?.vec ?? vec(0, 0),
+    }));
+
+    // 本月没改动就退而显示这个项目里最重的几篇
+    if (rows.length === 0) {
+      for (const [path, rec] of this.store.entries()) {
+        if (projectOf(path, rules) !== project) continue;
+        rows.push({ path, month: vec(0, 0), total: rec.vec });
+      }
+    }
+
+    return rows
+      .sort((a, b) => b.month.cjk - a.month.cjk || b.total.cjk - a.total.cjk)
+      .slice(0, 6);
   }
 
   /**
@@ -396,6 +449,8 @@ export default class AbacusPlugin extends Plugin {
       daily.push({ date: key, weekday: weekdayCN(ts), vec: v });
     }
 
+    const goal = this.settings.dailyGoal ?? 0;
+    const goalDays = goal > 0 ? daily.filter((d) => d.vec.cjk >= goal).length : 0;
     const weekSum = sumWriting(entries, weekStart, weekEnd);
     const weekDel = sumDeletions(entries, weekStart, weekEnd).del;
     // 那一周完全没数据就不生成，免得给空周留下占位文件
@@ -426,6 +481,8 @@ export default class AbacusPlugin extends Plugin {
       add: weekSum.add,
       del: weekDel,
       activeDays,
+      goalDays,
+      dailyGoal: goal,
       streak: await this.computeStreak(),
       total: this.store.total(),
       fileCount: this.store.size(),

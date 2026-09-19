@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 核心思想：只存分量，不存合成值。
  *
  * 一个汉字和一个英文词并不等价，把它们加成 "72.7 万字" 是没有语义的。
@@ -53,6 +53,10 @@ export interface StatsSettings extends CounterSettings {
   excludeFolders: string[];
   /** 状态栏与排序使用的主指标是否包含英文词 */
   includeLatinInPrimary: boolean;
+  /** 每日目标（汉字），0 表示不设目标 */
+  dailyGoal: number;
+  /** 每周目标（汉字），0 表示不设目标 */
+  weeklyGoal: number;
   /** 面板柱状图天数：7 或 30 */
   panelRange: number;
   /** 编辑去抖（毫秒） */
@@ -72,6 +76,8 @@ export const DEFAULT_SETTINGS: StatsSettings = {
   countCodeBlocks: false,
   excludeFolders: [".trash"],
   includeLatinInPrimary: false,
+  dailyGoal: 0,
+  weeklyGoal: 0,
   panelRange: 7,
   debounceMs: 2500,
   projectRules: [],

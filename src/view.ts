@@ -24,6 +24,12 @@ export interface HealthInfo {
   checkedAt: number;
 }
 
+export interface ProjectFileRow {
+  path: string;
+  month: Vec;
+  total: Vec;
+}
+
 export interface PanelData {
   todayAdd: Vec;
   todayDel: Vec;
@@ -36,6 +42,10 @@ export interface PanelData {
   range: number;
   streak: number;
   projects: ProjectRow[];
+  projectFiles: ProjectFileRow[];
+  selectedProject?: string;
+  dailyGoal: number;
+  weeklyGoal: number;
   health?: HealthInfo;
   scanning: boolean;
   progress?: { done: number; total: number };
@@ -46,6 +56,7 @@ export interface ViewHooks {
   onRescan: () => void;
   onRange: (days: number) => void;
   onAudit: () => void;
+  onProject: (name: string) => void;
 }
 
 const RANGES = [7, 30];
@@ -137,6 +148,19 @@ export class StatsView extends ItemView {
       heroSub.createSpan({ cls: "scs-streak", text: `　连续 ${d.streak} 天` });
     }
 
+    // 今日目标：有目标才出现
+    if (d.dailyGoal > 0) {
+      const pct = Math.min(100, Math.round((d.todayAdd.cjk / d.dailyGoal) * 100));
+      const goal = root.createDiv({ cls: "scs-goal" });
+      if (d.todayAdd.cjk >= d.dailyGoal) goal.addClass("is-done");
+      const track = goal.createDiv({ cls: "scs-goal-track" });
+      track.createDiv({ cls: "scs-goal-fill", attr: { style: `width:${pct}%` } });
+      goal.createDiv({
+        cls: "scs-goal-text",
+        text: `${fmt(d.todayAdd.cjk)} / ${fmt(d.dailyGoal)} 字 · ${pct}%`,
+      });
+    }
+
     // 趋势图
     const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
     const chart = chartWrap.createDiv({ cls: "scs-chart" });
@@ -161,6 +185,15 @@ export class StatsView extends ItemView {
     this.metric(grid, "本月", d.monthAdd);
     this.metric(grid, "全库", d.total);
 
+    if (d.weeklyGoal > 0) {
+      const pct = Math.min(100, Math.round((d.weekAdd.cjk / d.weeklyGoal) * 100));
+      const line = root.createDiv({
+        cls: "scs-goal-line" + (d.weekAdd.cjk >= d.weeklyGoal ? " is-done" : ""),
+        text: `本周 ${fmt(d.weekAdd.cjk)} / ${fmt(d.weeklyGoal)} 字 · ${pct}%`,
+      });
+      line.setAttr("title", `本周目标 ${fmt(d.weeklyGoal)} 汉字`);
+    }
+
     // 项目
     if (d.projects.length > 0) {
       const proj = root.createDiv({ cls: "scs-projects" });
@@ -170,11 +203,30 @@ export class StatsView extends ItemView {
       head.createDiv({ cls: "scs-project-num", text: "本月" });
       head.createDiv({ cls: "scs-project-num", text: "累计" });
       for (const p of d.projects) {
-        const row = proj.createDiv({ cls: "scs-project-row" });
+        const selected = d.selectedProject === p.name;
+        const row = proj.createDiv({ cls: "scs-project-row is-clickable" + (selected ? " is-selected" : "") });
         row.createDiv({ cls: "scs-project-name", text: p.name });
         row.createDiv({ cls: "scs-project-num", text: fmt(p.month.cjk) });
         row.createDiv({ cls: "scs-project-num is-dim", text: fmt(p.total.cjk) });
-        row.title = `${p.name}\n本月 汉字 ${fmt(p.month.cjk)} / 词 ${fmt(p.month.lat)}\n累计 汉字 ${fmt(p.total.cjk)} / 词 ${fmt(p.total.lat)}`;
+        row.title = `${p.name}\n本月 汉字 ${fmt(p.month.cjk)} / 词 ${fmt(p.month.lat)}\n累计 汉字 ${fmt(p.total.cjk)} / 词 ${fmt(p.total.lat)}\n点击查看该项目下的文件`;
+        row.onclick = () => this.hooks.onProject(p.name);
+      }
+
+      if (d.selectedProject) {
+        const files = proj.createDiv({ cls: "scs-files" });
+        files.createDiv({ cls: "scs-files-title", text: d.selectedProject });
+        if (d.projectFiles.length === 0) {
+          files.createDiv({ cls: "scs-files-empty", text: "本月没有改动" });
+        }
+        for (const f of d.projectFiles) {
+          const item = files.createDiv({ cls: "scs-file-row" });
+          item.createDiv({ cls: "scs-file-name", text: f.path.split("/").pop() ?? f.path });
+          item.createDiv({
+            cls: "scs-file-num",
+            text: f.month.cjk > 0 ? `+${fmt(f.month.cjk)}` : fmt(f.total.cjk),
+          });
+          item.title = `${f.path}\n本月新增 汉字 ${fmt(f.month.cjk)} / 词 ${fmt(f.month.lat)}\n全文 汉字 ${fmt(f.total.cjk)} / 词 ${fmt(f.total.lat)}`;
+        }
       }
     }
 

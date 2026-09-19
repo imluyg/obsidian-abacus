@@ -27,6 +27,9 @@ export interface WeeklyReportInput {
   add: Vec;
   del: Vec;
   activeDays: number;
+  /** 达到每日目标的天数（未设目标时为 0） */
+  goalDays: number;
+  dailyGoal: number;
   streak: number;
   total: Vec;
   fileCount: number;
@@ -65,6 +68,7 @@ export function buildWeeklyReport(i: WeeklyReportInput): string {
   lines.push(`| 本周删改 | −${n(i.del.cjk)} | −${n(i.del.lat)} |`);
   lines.push(`| 净增长 | ${n(i.add.cjk - i.del.cjk)} | ${n(i.add.lat - i.del.lat)} |`);
   lines.push(`| 活跃天数 | ${i.activeDays} / ${i.daily.length} | |`);
+  if (i.dailyGoal > 0) lines.push(`| 达标天数（≥${n(i.dailyGoal)}字） | ${i.goalDays} / ${i.daily.length} | |`);
   lines.push(`| 连续写作 | ${i.streak} 天 | |`);
   lines.push(`| 全库存量 | ${n(i.total.cjk)} | ${n(i.total.lat)} |`);
   lines.push("");

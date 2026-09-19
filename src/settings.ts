@@ -73,6 +73,38 @@ export class StatsSettingTab extends PluginSettingTab {
         })
       );
 
+    /* ------------------------------ 目标 ------------------------------ */
+
+    containerEl.createEl("h3", { text: "目标" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
+    });
+
+    new Setting(containerEl)
+      .setName("每日目标（汉字）")
+      .addText((t) => {
+        t.inputEl.type = "number";
+        t.setPlaceholder("0")
+          .setValue(String(s.dailyGoal ?? 0))
+          .onChange(async (v) => {
+            s.dailyGoal = Math.max(0, Math.floor(Number(v) || 0));
+            await this.plugin.applySettings(["display"]);
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("每周目标（汉字）")
+      .addText((t) => {
+        t.inputEl.type = "number";
+        t.setPlaceholder("0")
+          .setValue(String(s.weeklyGoal ?? 0))
+          .onChange(async (v) => {
+            s.weeklyGoal = Math.max(0, Math.floor(Number(v) || 0));
+            await this.plugin.applySettings(["display"]);
+          });
+      });
+
     /* ------------------------------ 项目 ------------------------------ */
 
     containerEl.createEl("h3", { text: "项目分组" });

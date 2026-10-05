@@ -21,7 +21,9 @@ import {
 import { filterNewEntries, parseBackup, shouldAutoBackup } from "../src/backup";
 import { Scanner } from "../src/scanner";
 import {
+  buildYearHeatmap,
   byDay,
+  heatLevel,
   isoWeek,
   isExcludedPath,
   parseProjectRules,
@@ -432,8 +434,45 @@ async function testBackup(): Promise<void> {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
+async function testHeatmap(): Promise<void> {
+  console.log("\n[6] 全年热力图");
+  const now = new Date(2026, 10, 15, 12, 0, 0).getTime();
+  const daily = new Map<string, Vec>([
+    ["2026-01-01", { cjk: 100, lat: 0 }],
+    ["2026-11-14", { cjk: 600, lat: 20 }],
+    ["2026-11-15", { cjk: 250, lat: 0 }],
+  ]);
+  const heat = buildYearHeatmap(2026, daily, now);
+
+  check("2026 有 53 周", heat.weeks, 53);
+  check("格子数 = 周数 × 7", heat.days.length, 53 * 7);
+  check("首格是上一年 12-29", heat.days[0].day, "2025-12-29");
+  check("首格不在本年", heat.days[0].inYear, false);
+  check("1 月 1 日在第 4 格", heat.days[3].day, "2026-01-01");
+  check("1 月 1 日在本年", heat.days[3].inYear, true);
+  check("1 月 1 日计数", heat.days[3].vec, { cjk: 100, lat: 0 });
+
+  check("11-14 计数", heat.days.find((d) => d.day === "2026-11-14")?.vec, { cjk: 600, lat: 20 });
+  check("今天标记", heat.days.find((d) => d.day === "2026-11-15")?.isToday, true);
+  check("未来格", heat.days.find((d) => d.day === "2026-12-31")?.future, true);
+  check("未来格计数为 0", heat.days.find((d) => d.day === "2026-12-31")?.vec, { cjk: 0, lat: 0 });
+
+  check("12 个月份标签", heat.months.length, 12);
+  check("1 月在首周", heat.months[0], { week: 0, month: 1 });
+  check("月份按顺序", heat.months.map((m) => m.month), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+  check("零值等级", heatLevel({ cjk: 0, lat: 0 }), 0);
+  check("1-199 等级", heatLevel({ cjk: 100, lat: 0 }), 1);
+  check("200-499 等级", heatLevel({ cjk: 250, lat: 0 }), 2);
+  check("500-999 等级", heatLevel({ cjk: 600, lat: 20 }), 3);
+  check("1000+ 等级", heatLevel({ cjk: 1200, lat: 0 }), 4);
+
+  const leap = buildYearHeatmap(2012, new Map(), now);
+  check("闰年从周日开始有 54 周", leap.weeks, 54);
+}
+
 async function testRealVault(vaultRoot: string): Promise<void> {
-  console.log(`\n[6] 真实库扫描：${vaultRoot}`);
+  console.log(`\n[7] 真实库扫描：${vaultRoot}`);
   const dataRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-data-"));
   const settings: StatsSettings = { ...DEFAULT_SETTINGS };
   const store = new StatsStore("", new FsAdapter(dataRoot));
@@ -518,6 +557,7 @@ async function main(): Promise<void> {
   await testLedgerFlow();
   await testLedgerIntegrity();
   await testBackup();
+  await testHeatmap();
   const vault = process.argv[2];
   if (vault && fs.existsSync(vault)) await testRealVault(vault);
   await testPerformance();
@@ -527,7 +567,7 @@ async function main(): Promise<void> {
 
 void main();
 async function testPerformance(): Promise<void> {
-  console.log("\n[7] 性能实测（只做参考，不设阈值）");
+  console.log("\n[8] 性能实测（只做参考，不设阈值）");
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-bench-"));
   const adapter = new FsAdapter(root);
   const store = new StatsStore("", adapter);

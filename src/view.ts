@@ -1,6 +1,7 @@
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import type { Vec } from "./types";
 import { L } from "./i18n";
+import { heatLevel, type YearHeatmap } from "./stats";
 
 export const VIEW_TYPE_STATS = "abacus-view";
 
@@ -41,6 +42,7 @@ export interface PanelData {
   current?: { path: string; vec: Vec };
   days: DayBar[];
   range: number;
+  heat: YearHeatmap;
   streak: number;
   projects: ProjectRow[];
   projectFiles: ProjectFileRow[];
@@ -181,6 +183,8 @@ export class StatsView extends ItemView {
       col.title = t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
     });
 
+    this.renderHeatmap(root, d.heat);
+
     // 汇总
     const grid = root.createDiv({ cls: "scs-grid" });
     this.metric(grid, t.week, d.weekAdd);
@@ -278,6 +282,79 @@ export class StatsView extends ItemView {
       minute: "2-digit",
     });
     root.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
+  }
+
+  /**
+   * 全年热力图：周优先的 7 行网格，横向滚动。
+   * 格子只负责布局与提示，颜色由内层 fill 承担，
+   * 这样“今天”的描边不会被低档位的透明度一起压暗。
+   */
+  private renderHeatmap(parent: HTMLElement, heat: YearHeatmap): void {
+    const t = L();
+    const opacities = [0, 0.28, 0.5, 0.72, 1];
+    const wrap = parent.createDiv({ cls: "scs-heat" });
+    wrap.createDiv({ cls: "scs-section-title", text: t.heatTitle(heat.year) });
+
+    const scroll = wrap.createDiv({ cls: "scs-heat-scroll" });
+    const body = scroll.createDiv({ cls: "scs-heat-body" });
+
+    const top = body.createDiv({ cls: "scs-heat-top" });
+    top.createDiv({ cls: "scs-heat-corner" });
+    const months = top.createDiv({
+      cls: "scs-heat-months",
+      attr: { style: `width:${heat.weeks * 14}px` },
+    });
+    for (const m of heat.months) {
+      months.createSpan({
+        cls: "scs-heat-month",
+        attr: { style: `left:${m.week * 14}px` },
+        text: t.monthShort(m.month),
+      });
+    }
+
+    const main = body.createDiv({ cls: "scs-heat-main" });
+    const weekdays = main.createDiv({ cls: "scs-heat-weekdays" });
+    for (let i = 0; i < 7; i++) {
+      weekdays.createDiv({
+        cls: "scs-heat-weekday",
+        text: i < 6 && i % 2 === 0 ? t.heatWeekdays[i / 2] : "",
+      });
+    }
+
+    const grid = main.createDiv({ cls: "scs-heat-grid" });
+    for (let w = 0; w < heat.weeks; w++) {
+      const col = grid.createDiv({ cls: "scs-heat-week" });
+      for (let d = 0; d < 7; d++) {
+        const day = heat.days[w * 7 + d];
+        const cell = col.createDiv({ cls: "scs-heat-cell" });
+        if (!day.inYear || day.future) {
+          cell.addClass("is-out");
+        } else {
+          const lv = heatLevel(day.vec);
+          if (lv > 0) {
+            cell.createDiv({
+              cls: "scs-heat-fill",
+              attr: { style: `opacity:${opacities[lv]}` },
+            });
+          }
+          cell.title = t.chartTip(day.day, fmt(day.vec.cjk), fmt(day.vec.lat));
+        }
+        if (day.isToday) cell.addClass("is-today");
+      }
+    }
+
+    const legend = wrap.createDiv({ cls: "scs-heat-legend" });
+    legend.createSpan({ text: t.heatLess });
+    for (let lv = 0; lv < 5; lv++) {
+      const cell = legend.createDiv({ cls: "scs-heat-cell scs-heat-legend-cell" });
+      if (lv > 0) {
+        cell.createDiv({
+          cls: "scs-heat-fill",
+          attr: { style: `opacity:${opacities[lv]}` },
+        });
+      }
+    }
+    legend.createSpan({ text: t.heatMore });
   }
 
   private metric(parent: HTMLElement, label: string, v: Vec): void {

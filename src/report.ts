@@ -1,4 +1,5 @@
 import type { Vec } from "./types";
+import { heatLevel } from "./stats";
 
 /** 周报只是一个纯函数：输入一周的账本视图，输出 Markdown 字符串 */
 
@@ -145,20 +146,10 @@ export interface YearReportInput {
   generatedAt: number;
 }
 
-/** 五档色阶，按当天写作量分桶 */
-const LEVELS = [0, 200, 500, 1000, 2000];
-
-function levelOf(v: Vec): number {
-  const total = v.cjk + v.lat;
-  if (total <= 0) return 0;
-  let lv = 1;
-  for (let i = 1; i < LEVELS.length; i++) if (total >= LEVELS[i]) lv = i + 1;
-  return lv;
-}
-
 /**
  * 热力图用 HTML 表格输出。Obsidian 的阅读视图会正常渲染内联 HTML，
  * 颜色走主题变量 + opacity，深色浅色主题都不用单独适配。
+ * 色阶与侧栏面板共用 heatLevel，避免两处对同一天给出不同深浅。
  */
 function heatmapHtml(daily: Record<string, Vec>, year: number): string {
   const first = new Date(year, 0, 1);
@@ -175,7 +166,7 @@ function heatmapHtml(daily: Record<string, Vec>, year: number): string {
       const inYear = cursor.getFullYear() === year;
       const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
       const v = inYear ? daily[key] : undefined;
-      const lv = v ? levelOf(v) : -1;
+      const lv = v ? heatLevel(v) : -1;
       if (lv < 0) {
         week.push('<div style="width:11px;height:11px"></div>');
       } else {

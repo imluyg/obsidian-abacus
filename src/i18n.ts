@@ -43,6 +43,11 @@ const zh = {
   foot: (files: string, time: string) => `${files} 个文件　更新于 ${time}`,
   wordsShort: (n: string) => `词 ${n}`,
   rangeDays: (n: number) => `${n}天`,
+  heatTitle: (year: number) => `全年热力图 ${year}`,
+  heatWeekdays: ["一", "三", "五"],
+  monthShort: (m: number) => `${m}月`,
+  heatLess: "少",
+  heatMore: "多",
 
   // 命令
   cmdOpen: "打开统计面板",
@@ -212,6 +217,13 @@ const en: Dict = {
   foot: (files, time) => `${files} files　updated ${time}`,
   wordsShort: (n) => `words ${n}`,
   rangeDays: (n) => `${n}d`,
+  heatTitle: (year) => `Yearly heatmap ${year}`,
+  heatWeekdays: ["Mon", "Wed", "Fri"],
+  monthShort: (m) =>
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1] ??
+    `${m}`,
+  heatLess: "Less",
+  heatMore: "More",
 
   cmdOpen: "Open stats panel",
   cmdRebuild: "Rebuild vault snapshot",

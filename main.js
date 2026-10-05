@@ -357,6 +357,11 @@ const zh = {
     foot: (files, time) => `${files} 个文件　更新于 ${time}`,
     wordsShort: (n) => `词 ${n}`,
     rangeDays: (n) => `${n}天`,
+    heatTitle: (year) => `全年热力图 ${year}`,
+    heatWeekdays: ["一", "三", "五"],
+    monthShort: (m) => `${m}月`,
+    heatLess: "少",
+    heatMore: "多",
     cmdOpen: "打开统计面板",
     cmdRebuild: "重建全库快照",
     cmdWeekly: "生成本周周报",
@@ -495,6 +500,14 @@ const en = {
     foot: (files, time) => `${files} files　updated ${time}`,
     wordsShort: (n) => `words ${n}`,
     rangeDays: (n) => `${n}d`,
+    heatTitle: (year) => `Yearly heatmap ${year}`,
+    heatWeekdays: ["Mon", "Wed", "Fri"],
+    monthShort: (m) => {
+        var _a;
+        return (_a = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]) !== null && _a !== void 0 ? _a : `${m}`;
+    },
+    heatLess: "Less",
+    heatMore: "More",
     cmdOpen: "Open stats panel",
     cmdRebuild: "Rebuild vault snapshot",
     cmdWeekly: "Generate this week's report",
@@ -889,12 +902,15 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const now = Date.now();
         const range = this.settings.panelRange === 30 ? 30 : 7;
         const chartFrom = (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(range - 1));
-        const from = Math.min((0, stats_1.startOfMonth)(now), (0, stats_1.startOfWeek)(now), chartFrom);
+        const year = new Date(now).getFullYear();
+        const yearStart = new Date(year, 0, 1).getTime();
+        const from = Math.min((0, stats_1.startOfMonth)(now), (0, stats_1.startOfWeek)(now), chartFrom, yearStart);
         const entries = await this.readMonths((0, stats_1.monthsBetween)(from, now + 1));
         const todaySum = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1);
         const fileDel = (0, stats_1.sumDeletions)(entries, (0, stats_1.startOfDay)(now), now + 1).del;
         const todayDel = (0, types_1.vec)(todaySum.del.cjk + fileDel.cjk, todaySum.del.lat + fileDel.lat);
         const perDay = (0, stats_1.byDay)(entries);
+        const heat = (0, stats_1.buildYearHeatmap)(year, perDay, now);
         const days = [];
         for (let i = 0; i < range; i++) {
             const ts = (0, stats_1.addDays)(chartFrom, i);
@@ -918,6 +934,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
             current: active && rec ? { path: active.path, vec: rec.vec } : undefined,
             days,
             range,
+            heat,
             streak: await this.computeStreak(),
             projects: this.buildProjects(entries, now),
             dailyGoal: (_b = this.settings.dailyGoal) !== null && _b !== void 0 ? _b : 0,
@@ -1546,6 +1563,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildWeeklyReport = buildWeeklyReport;
 exports.buildYearReport = buildYearReport;
 exports.buildCsv = buildCsv;
+const stats_1 = require("./stats");
 const n = (v) => Math.round(v).toLocaleString("en-US");
 function buildWeeklyReport(i) {
     const lines = [];
@@ -1612,17 +1630,6 @@ function linkFor(path) {
     const clean = path.replace(/\.md$/i, "");
     return `[[${clean}]]`;
 }
-const LEVELS = [0, 200, 500, 1000, 2000];
-function levelOf(v) {
-    const total = v.cjk + v.lat;
-    if (total <= 0)
-        return 0;
-    let lv = 1;
-    for (let i = 1; i < LEVELS.length; i++)
-        if (total >= LEVELS[i])
-            lv = i + 1;
-    return lv;
-}
 function heatmapHtml(daily, year) {
     const first = new Date(year, 0, 1);
     const shift = (first.getDay() + 6) % 7;
@@ -1637,7 +1644,7 @@ function heatmapHtml(daily, year) {
             const inYear = cursor.getFullYear() === year;
             const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
             const v = inYear ? daily[key] : undefined;
-            const lv = v ? levelOf(v) : -1;
+            const lv = v ? (0, stats_1.heatLevel)(v) : -1;
             if (lv < 0) {
                 week.push('<div style="width:11px;height:11px"></div>');
             }
@@ -2136,6 +2143,8 @@ exports.sumWriting = sumWriting;
 exports.sumDeletions = sumDeletions;
 exports.byDay = byDay;
 exports.daysWithWriting = daysWithWriting;
+exports.heatLevel = heatLevel;
+exports.buildYearHeatmap = buildYearHeatmap;
 exports.streakFrom = streakFrom;
 exports.parseProjectRules = parseProjectRules;
 exports.projectOf = projectOf;
@@ -2206,6 +2215,50 @@ function daysWithWriting(entries) {
         out.add((0, store_1.dayKey)(e.t));
     }
     return out;
+}
+const HEAT_THRESHOLDS = [200, 500, 1000];
+function heatLevel(v) {
+    const total = v.cjk + v.lat;
+    if (total <= 0)
+        return 0;
+    let lv = 1;
+    for (let i = 0; i < HEAT_THRESHOLDS.length; i++) {
+        if (total >= HEAT_THRESHOLDS[i])
+            lv = i + 2;
+    }
+    return lv;
+}
+function buildYearHeatmap(year, daily, now = Date.now()) {
+    var _a;
+    const yearStart = new Date(year, 0, 1).getTime();
+    const shift = (new Date(yearStart).getDay() + 6) % 7;
+    const gridStart = addDays(yearStart, -shift);
+    const lastDay = new Date(year, 11, 31).getTime();
+    const spanDays = Math.round((lastDay - gridStart) / 86400000) + 1;
+    const weeks = Math.ceil(spanDays / 7);
+    const todayKey = (0, store_1.dayKey)(now);
+    const days = [];
+    const months = [];
+    for (let w = 0; w < weeks; w++) {
+        for (let d = 0; d < 7; d++) {
+            const ts = addDays(gridStart, w * 7 + d);
+            const dt = new Date(ts);
+            const inYear = dt.getFullYear() === year;
+            const future = ts > now;
+            const key = (0, store_1.dayKey)(ts);
+            days.push({
+                day: key,
+                vec: inYear && !future ? (_a = daily.get(key)) !== null && _a !== void 0 ? _a : types_1.ZERO : types_1.ZERO,
+                inYear,
+                future,
+                isToday: key === todayKey,
+            });
+            if (inYear && dt.getDate() === 1) {
+                months.push({ week: w, month: dt.getMonth() + 1 });
+            }
+        }
+    }
+    return { year, weeks, days, months };
 }
 function streakFrom(days, today = Date.now()) {
     let n = 0;
@@ -2793,6 +2846,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.StatsView = exports.VIEW_TYPE_STATS = void 0;
 const obsidian_1 = require("obsidian");
 const i18n_1 = require("./i18n");
+const stats_1 = require("./stats");
 exports.VIEW_TYPE_STATS = "abacus-view";
 const RANGES = [7, 30];
 const fmt = (n) => Math.round(n).toLocaleString("en-US");
@@ -2897,6 +2951,7 @@ class StatsView extends obsidian_1.ItemView {
                 col.createDiv({ cls: "scs-bar-label", text: bar.label });
             col.title = t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
         });
+        this.renderHeatmap(root, d.heat);
         const grid = root.createDiv({ cls: "scs-grid" });
         this.metric(grid, t.week, d.weekAdd);
         this.metric(grid, t.month, d.monthAdd);
@@ -2974,6 +3029,70 @@ class StatsView extends obsidian_1.ItemView {
             minute: "2-digit",
         });
         root.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
+    }
+    renderHeatmap(parent, heat) {
+        const t = (0, i18n_1.L)();
+        const opacities = [0, 0.28, 0.5, 0.72, 1];
+        const wrap = parent.createDiv({ cls: "scs-heat" });
+        wrap.createDiv({ cls: "scs-section-title", text: t.heatTitle(heat.year) });
+        const scroll = wrap.createDiv({ cls: "scs-heat-scroll" });
+        const body = scroll.createDiv({ cls: "scs-heat-body" });
+        const top = body.createDiv({ cls: "scs-heat-top" });
+        top.createDiv({ cls: "scs-heat-corner" });
+        const months = top.createDiv({
+            cls: "scs-heat-months",
+            attr: { style: `width:${heat.weeks * 14}px` },
+        });
+        for (const m of heat.months) {
+            months.createSpan({
+                cls: "scs-heat-month",
+                attr: { style: `left:${m.week * 14}px` },
+                text: t.monthShort(m.month),
+            });
+        }
+        const main = body.createDiv({ cls: "scs-heat-main" });
+        const weekdays = main.createDiv({ cls: "scs-heat-weekdays" });
+        for (let i = 0; i < 7; i++) {
+            weekdays.createDiv({
+                cls: "scs-heat-weekday",
+                text: i < 6 && i % 2 === 0 ? t.heatWeekdays[i / 2] : "",
+            });
+        }
+        const grid = main.createDiv({ cls: "scs-heat-grid" });
+        for (let w = 0; w < heat.weeks; w++) {
+            const col = grid.createDiv({ cls: "scs-heat-week" });
+            for (let d = 0; d < 7; d++) {
+                const day = heat.days[w * 7 + d];
+                const cell = col.createDiv({ cls: "scs-heat-cell" });
+                if (!day.inYear || day.future) {
+                    cell.addClass("is-out");
+                }
+                else {
+                    const lv = (0, stats_1.heatLevel)(day.vec);
+                    if (lv > 0) {
+                        cell.createDiv({
+                            cls: "scs-heat-fill",
+                            attr: { style: `opacity:${opacities[lv]}` },
+                        });
+                    }
+                    cell.title = t.chartTip(day.day, fmt(day.vec.cjk), fmt(day.vec.lat));
+                }
+                if (day.isToday)
+                    cell.addClass("is-today");
+            }
+        }
+        const legend = wrap.createDiv({ cls: "scs-heat-legend" });
+        legend.createSpan({ text: t.heatLess });
+        for (let lv = 0; lv < 5; lv++) {
+            const cell = legend.createDiv({ cls: "scs-heat-cell scs-heat-legend-cell" });
+            if (lv > 0) {
+                cell.createDiv({
+                    cls: "scs-heat-fill",
+                    attr: { style: `opacity:${opacities[lv]}` },
+                });
+            }
+        }
+        legend.createSpan({ text: t.heatMore });
     }
     metric(parent, label, v) {
         const box = parent.createDiv({ cls: "scs-metric" });

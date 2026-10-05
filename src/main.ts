@@ -19,6 +19,7 @@ import { StatsView, VIEW_TYPE_STATS, type DayBar, type HealthInfo, type PanelDat
 import { StatsSettingTab, type SettingsDirtyKind } from "./settings";
 import {
   addDays,
+  buildYearHeatmap,
   byDay,
   daysWithWriting,
   fmtDate,
@@ -332,7 +333,9 @@ export default class AbacusPlugin extends Plugin {
     const now = Date.now();
     const range = this.settings.panelRange === 30 ? 30 : 7;
     const chartFrom = addDays(startOfDay(now), -(range - 1));
-    const from = Math.min(startOfMonth(now), startOfWeek(now), chartFrom);
+    const year = new Date(now).getFullYear();
+    const yearStart = new Date(year, 0, 1).getTime();
+    const from = Math.min(startOfMonth(now), startOfWeek(now), chartFrom, yearStart);
     const entries = await this.readMonths(monthsBetween(from, now + 1));
 
     const todaySum = sumWriting(entries, startOfDay(now), now + 1);
@@ -340,6 +343,7 @@ export default class AbacusPlugin extends Plugin {
     const todayDel = vec(todaySum.del.cjk + fileDel.cjk, todaySum.del.lat + fileDel.lat);
 
     const perDay = byDay(entries);
+    const heat = buildYearHeatmap(year, perDay, now);
     const days: DayBar[] = [];
     for (let i = 0; i < range; i++) {
       const ts = addDays(chartFrom, i);
@@ -365,6 +369,7 @@ export default class AbacusPlugin extends Plugin {
       current: active && rec ? { path: active.path, vec: rec.vec } : undefined,
       days,
       range,
+      heat,
       streak: await this.computeStreak(),
       projects: this.buildProjects(entries, now),
       dailyGoal: this.settings.dailyGoal ?? 0,

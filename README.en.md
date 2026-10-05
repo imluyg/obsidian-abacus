@@ -37,6 +37,7 @@ Every statistic — day, week, month, project, streak — is a view over the led
 - **Ledger self-check**: bad lines, truncation, duplicates, future timestamps — shown persistently
 - **Restorable ledger**: merge a backup JSON back into the ledger, deduplicating events; the current ledger is backed up first
 - **Auto-backup**: export a full ledger on startup when the interval has elapsed
+- **Yearly heatmap**: a GitHub-style contribution grid in the sidebar, horizontally scrollable, shaded by daily output
 - **Multi-device safe**: the ledger is split per device, so sync conflicts don't overwrite each other
 - **Optional frontmatter write-back**: expose the count to Bases / Dataview
 

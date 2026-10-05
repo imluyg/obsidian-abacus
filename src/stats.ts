@@ -1,5 +1,5 @@
 import type { LedgerEntry, StatsSettings, Vec } from "./types";
-import { addVec, isZeroVec, vec } from "./types";
+import { addVec, isZeroVec, vec, ZERO } from "./types";
 import { dayKey, monthKey } from "./store";
 
 /** 只把这些来源算作“写” */
@@ -66,6 +66,90 @@ export function daysWithWriting(entries: LedgerEntry[]): Set<string> {
     out.add(dayKey(e.t));
   }
   return out;
+}
+
+/*
+ * 全年热力图。
+ *
+ * 时间窗口是日历年（1 月 1 日到 12 月 31 日），格子按周优先排列：
+ * week 0 的周一到周日，然后 week 1……前面的空白属于上一年，后面的属于下一年。
+ * 配色档位与年度报告共用，避免面板和报告对同一天给出不同深浅。
+ */
+
+const HEAT_THRESHOLDS = [200, 500, 1000];
+
+/** 0 = 没写；1 = 1-199；2 = 200-499；3 = 500-999；4 = 1000+（汉字+英文词） */
+export function heatLevel(v: Vec): number {
+  const total = v.cjk + v.lat;
+  if (total <= 0) return 0;
+  let lv = 1;
+  for (let i = 0; i < HEAT_THRESHOLDS.length; i++) {
+    if (total >= HEAT_THRESHOLDS[i]) lv = i + 2;
+  }
+  return lv;
+}
+
+export interface HeatDay {
+  day: string;
+  vec: Vec;
+  /** 前后补齐的格子不属于本年 */
+  inYear: boolean;
+  /** 今天之后的格子 */
+  future: boolean;
+  isToday: boolean;
+}
+
+export interface HeatMonth {
+  /** 第几列，0 起 */
+  week: number;
+  /** 1-12 */
+  month: number;
+}
+
+export interface YearHeatmap {
+  year: number;
+  weeks: number;
+  /** 按周优先排列，长度 = weeks × 7 */
+  days: HeatDay[];
+  months: HeatMonth[];
+}
+
+export function buildYearHeatmap(
+  year: number,
+  daily: Map<string, Vec>,
+  now = Date.now()
+): YearHeatmap {
+  const yearStart = new Date(year, 0, 1).getTime();
+  const shift = (new Date(yearStart).getDay() + 6) % 7; // 周一为一周起点
+  const gridStart = addDays(yearStart, -shift);
+  const lastDay = new Date(year, 11, 31).getTime();
+  const spanDays = Math.round((lastDay - gridStart) / 86_400_000) + 1;
+  const weeks = Math.ceil(spanDays / 7);
+  const todayKey = dayKey(now);
+  const days: HeatDay[] = [];
+  const months: HeatMonth[] = [];
+
+  for (let w = 0; w < weeks; w++) {
+    for (let d = 0; d < 7; d++) {
+      const ts = addDays(gridStart, w * 7 + d);
+      const dt = new Date(ts);
+      const inYear = dt.getFullYear() === year;
+      const future = ts > now;
+      const key = dayKey(ts);
+      days.push({
+        day: key,
+        vec: inYear && !future ? daily.get(key) ?? ZERO : ZERO,
+        inYear,
+        future,
+        isToday: key === todayKey,
+      });
+      if (inYear && dt.getDate() === 1) {
+        months.push({ week: w, month: dt.getMonth() + 1 });
+      }
+    }
+  }
+
+  return { year, weeks, days, months };
 }
 
 /**

@@ -52,6 +52,7 @@ const zh = {
   cmdYear: "生成年度报告",
   cmdCsv: "导出账本 CSV",
   cmdBackup: "导出账本备份",
+  cmdRestore: "从备份恢复账本",
   cmdSyncFm: "把字数写入当前笔记属性",
   cmdAudit: "检查账本完整性",
 
@@ -67,6 +68,17 @@ const zh = {
   noticeCsvFail: (e: string) => `导出 CSV 失败：${e}`,
   noticeBackup: (p: string, n: number) => `账本已导出：${p}（${n} 条）`,
   noticeBackupFail: (e: string) => `导出失败：${e}`,
+  noticeRestoreEmpty: "备份目录里没有可导入的 JSON 文件。",
+  noticeRestoreInvalid: (e: string) => `备份无法读取：${e}`,
+  noticeRestoreNoEntries: "备份里没有有效条目。",
+  noticeRestoreNothing: (total: number, dup: number, bad: number) =>
+    `备份共 ${total} 条，全部重复，没有需要导入的内容（重复 ${dup}，坏行 ${bad}）。`,
+  noticeRestoreDone: (added: number, dup: number, bad: number, safety: string | null) =>
+    `已导入 ${added} 条（跳过重复 ${dup}，坏行 ${bad}）。` +
+    (safety ? `安全备份：${safety}` : ""),
+  noticeRestoreFail: (e: string) => `导入失败：${e}`,
+  noticeRestoreCancelled: "导入前的安全备份失败，已取消导入。",
+  noticeAutoBackup: (p: string) => `已自动备份账本到 ${p}`,
   noticeLedgerEmpty: "账本还是空的，没有可导出的内容。",
   noticeFmWritten: (k: string, n: number) => `已写入 ${k}: ${n}`,
   noticeFmLatest: (k: string, n: number) => `${k} 已经是最新（${n}）`,
@@ -79,11 +91,29 @@ const zh = {
 
   // 状态栏
   statusToday: (c: string, l: string) => `今日 +${c}字 +${l}词`,
+  statusTodayCombined: (n: string) => `今日 +${n}`,
   statusTodayZero: "今日 +0",
   statusTitleWeek: (c: string, l: string) => `本周 汉字 ${c} / 词 ${l}`,
   statusTitleStreak: (n: number) => `连续 ${n} 天`,
   statusTitleTotal: (c: string, l: string) => `全库 汉字 ${c} / 词 ${l}`,
   statusTitleClick: "点击打开面板",
+
+  // 备份恢复
+  restorePickPlaceholder: "搜索备份文件…",
+  restoreTitle: "导入账本备份",
+  restoreSummary: (total: number, fresh: number, dup: number, bad: number) =>
+    `备份共 ${total} 条：可新增 ${fresh}，重复 ${dup}，无法解析 ${bad}。`,
+  restoreSource: "备份文件",
+  restoreVault: "来源库",
+  restoreDevice: "设备",
+  restoreOtherDevice:
+    "这份备份由另一台设备导出。如果本机也记录过同一段写作，可能出现重复计数；导入后建议跑一次账本体检。",
+  restoreOtherVault: "这份备份来自另一个库，路径可能对不上；确认后再导入。",
+  restoreNewerVersion: (v: number) =>
+    `备份由更新版本的 Abacus 生成（v${v}），已按当前格式导入已知字段。`,
+  restoreSafety: "导入前会先把当前账本导出到备份目录（文件名带 -pre-restore 时间后缀）。",
+  restoreConfirm: "导入",
+  cancel: "取消",
 
   // 设置：口径
   sCounter: "统计口径",
@@ -104,7 +134,8 @@ const zh = {
   // 设置：显示
   sDisplay: "显示",
   sLatinPrimary: "主指标包含英文词",
-  sLatinPrimaryDesc: "关闭时状态栏只看汉字；两个分量在面板里始终分开显示。",
+  sLatinPrimaryDesc:
+    "开启后状态栏的今日数字把英文词并入汉字，只显示一个合计；关闭时分别显示汉字和英文词。面板始终分开显示两个分量。",
   // 设置：目标
   sGoals: "目标",
   sGoalsDesc: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
@@ -138,6 +169,13 @@ const zh = {
   sBackup: "导出账本备份",
   sBackupDesc: "把账本合并成一个 JSON 写入下面这个目录。账本本体在 .obsidian 里不一定被同步，这份才是异地备份。",
   sBackupFolder: "账本备份目录",
+  sRestore: "从备份恢复",
+  sRestoreDesc:
+    "从备份目录选择一个 JSON，合并回账本；重复事件自动跳过。导入前会先导出当前账本。",
+  sRestoreBtn: "选择备份",
+  sAutoBackup: "自动备份间隔（天）",
+  sAutoBackupDesc:
+    "0 表示关闭。启动时如果本机最近一份备份早于这个天数，会自动导出一份完整账本。",
 };
 
 export type Dict = typeof zh;
@@ -182,6 +220,7 @@ const en: Dict = {
   cmdYear: "Generate yearly report",
   cmdCsv: "Export ledger as CSV",
   cmdBackup: "Export ledger backup",
+  cmdRestore: "Restore ledger from backup",
   cmdSyncFm: "Write word count to current note",
   cmdAudit: "Check ledger integrity",
 
@@ -196,6 +235,17 @@ const en: Dict = {
   noticeCsvFail: (e) => `Failed to export CSV: ${e}`,
   noticeBackup: (p, n) => `Ledger exported: ${p} (${n} entries)`,
   noticeBackupFail: (e) => `Export failed: ${e}`,
+  noticeRestoreEmpty: "No backup JSON found in the backup folder.",
+  noticeRestoreInvalid: (e) => `Cannot read backup: ${e}`,
+  noticeRestoreNoEntries: "This backup has no valid entries.",
+  noticeRestoreNothing: (total, dup, bad) =>
+    `All ${total} entries are already present; nothing to import (${dup} duplicates, ${bad} bad lines).`,
+  noticeRestoreDone: (added, dup, bad, safety) =>
+    `Imported ${added} entries (${dup} duplicates skipped, ${bad} bad lines).` +
+    (safety ? ` Safety backup: ${safety}` : ""),
+  noticeRestoreFail: (e) => `Import failed: ${e}`,
+  noticeRestoreCancelled: "Safety backup failed; the import was cancelled.",
+  noticeAutoBackup: (p) => `Ledger auto-backed up to ${p}`,
   noticeLedgerEmpty: "The ledger is still empty.",
   noticeFmWritten: (k, n) => `Wrote ${k}: ${n}`,
   noticeFmLatest: (k, n) => `${k} is already up to date (${n})`,
@@ -207,11 +257,28 @@ const en: Dict = {
   noticeRepair: (n) => `Truncated tail found in the ledger; dropped ${n} characters and continued.`,
 
   statusToday: (c, l) => `Today +${c}c +${l}w`,
+  statusTodayCombined: (n) => `Today +${n}`,
   statusTodayZero: "Today +0",
   statusTitleWeek: (c, l) => `Week ${c} CJK / ${l} words`,
   statusTitleStreak: (n) => `${n}-day streak`,
   statusTitleTotal: (c, l) => `Vault ${c} CJK / ${l} words`,
   statusTitleClick: "Click to open the panel",
+
+  restorePickPlaceholder: "Search backup files…",
+  restoreTitle: "Import ledger backup",
+  restoreSummary: (total, fresh, dup, bad) =>
+    `${total} entries in backup: ${fresh} new, ${dup} duplicates, ${bad} unreadable.`,
+  restoreSource: "Backup file",
+  restoreVault: "Source vault",
+  restoreDevice: "Device",
+  restoreOtherDevice:
+    "This backup was exported by another device. If this vault also recorded the same writing, counts may double; run a ledger check after importing.",
+  restoreOtherVault: "This backup comes from another vault; paths may not match. Continue only if you are sure.",
+  restoreNewerVersion: (v) => `Created by a newer Abacus (v${v}); known fields will be imported.`,
+  restoreSafety:
+    "The current ledger will first be exported to the backup folder with a -pre-restore time suffix.",
+  restoreConfirm: "Import",
+  cancel: "Cancel",
 
   sCounter: "Counting rules",
   sCounterDesc: "Changing these rebuilds the snapshot (no writing is recorded). The ledger is untouched.",
@@ -230,7 +297,8 @@ const en: Dict = {
   sPropKeyDesc: "Defaults to words. Only the CJK count is written; see the ledger for the split.",
   sDisplay: "Display",
   sLatinPrimary: "Include English words in the primary metric",
-  sLatinPrimaryDesc: "When off, the status bar shows CJK only; the panel always shows both separately.",
+  sLatinPrimaryDesc:
+    "When on, the status bar's today number folds English words into CJK and shows one total; when off, it shows both separately. The panel always shows both components.",
   sGoals: "Goals",
   sGoalsDesc:
     "Counted in CJK characters. 0 or empty means no goal; with a goal the panel shows a progress bar and the weekly report gains a streak-of-goals row.",
@@ -263,6 +331,13 @@ const en: Dict = {
   sBackupDesc:
     "Merge the ledger into one JSON in the folder below. The ledger itself may not be synced, so this is the off-site copy.",
   sBackupFolder: "Backup folder",
+  sRestore: "Restore from backup",
+  sRestoreDesc:
+    "Choose a JSON from the backup folder and merge it back into the ledger; duplicate events are skipped. The current ledger is exported first.",
+  sRestoreBtn: "Choose backup",
+  sAutoBackup: "Auto-backup interval (days)",
+  sAutoBackupDesc:
+    "0 disables it. On startup, if this device's latest backup is older than this many days, a full ledger export is written.",
 };
 
 let current: Dict = zh;

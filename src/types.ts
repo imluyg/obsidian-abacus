@@ -51,7 +51,7 @@ export interface CounterSettings {
 export interface StatsSettings extends CounterSettings {
   /** 不参与统计的目录前缀（vault 相对路径） */
   excludeFolders: string[];
-  /** 状态栏与排序使用的主指标是否包含英文词 */
+  /** 状态栏的今日主数字是否把英文词并入（面板始终分开显示） */
   includeLatinInPrimary: boolean;
   /** 是否把汉字数写回笔记 frontmatter（会修改笔记，默认关闭） */
   writeFrontmatter: boolean;
@@ -73,6 +73,8 @@ export interface StatsSettings extends CounterSettings {
   autoWeeklyReport: boolean;
   /** 账本备份导出目录 */
   backupFolder: string;
+  /** 自动备份间隔（天），0 表示关闭 */
+  backupIntervalDays: number;
 }
 
 export const DEFAULT_SETTINGS: StatsSettings = {
@@ -90,6 +92,7 @@ export const DEFAULT_SETTINGS: StatsSettings = {
   reportFolder: "归档/统计归档",
   autoWeeklyReport: true,
   backupFolder: "归档/统计归档/账本备份",
+  backupIntervalDays: 7,
 };
 
 /* ------------------------------------------------------------------ */
@@ -136,6 +139,14 @@ export interface LedgerEntry {
   /** [汉字, 英文词] */
   del: [number, number];
   src: LedgerSrc;
+}
+
+/**
+ * 事件的唯一键。体检用它数重复，导入用它做幂等去重。
+ * 键必须覆盖所有会进入统计的字段，否则两条不同的事件会被误合并。
+ */
+export function entryKey(e: LedgerEntry): string {
+  return `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
 }
 
 export function entryAddVec(e: LedgerEntry): Vec {

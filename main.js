@@ -35,6 +35,224 @@ function __require(id, from) {
   if (__hostRequire) return __hostRequire(id);
   throw new Error("无法解析模块: " + id);
 }
+__modules["backup.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.BACKUP_VERSION = exports.BACKUP_FORMAT = void 0;
+exports.parseBackup = parseBackup;
+exports.filterNewEntries = filterNewEntries;
+exports.backupNameMeta = backupNameMeta;
+exports.shouldAutoBackup = shouldAutoBackup;
+const types_1 = require("./types");
+exports.BACKUP_FORMAT = "abacus-ledger-backup";
+exports.BACKUP_VERSION = 1;
+const SRCS = new Set(["baseline", "edit", "scan", "delete"]);
+const BACKUP_NAME = /^账本备份 (\d{4}-\d{2}-\d{2})(?:\.([A-Za-z0-9_-]+))?\.json$/;
+function parseBackup(raw) {
+    let data;
+    try {
+        data = JSON.parse(raw);
+    }
+    catch (_a) {
+        throw new Error("不是合法的 JSON");
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw new Error("备份不是一个 JSON 对象");
+    }
+    const obj = data;
+    if (obj.format !== undefined && obj.format !== exports.BACKUP_FORMAT) {
+        throw new Error("不是 Abacus 的账本备份");
+    }
+    if (!Array.isArray(obj.entries)) {
+        throw new Error("备份里没有 entries 数组");
+    }
+    const entries = [];
+    let bad = 0;
+    for (const item of obj.entries) {
+        const e = normalizeEntry(item);
+        if (e)
+            entries.push(e);
+        else
+            bad++;
+    }
+    const version = typeof obj.version === "number" ? obj.version : undefined;
+    return {
+        entries,
+        bad,
+        exportedAt: typeof obj.exportedAt === "string" ? obj.exportedAt : undefined,
+        exportedBy: typeof obj.exportedBy === "string" ? obj.exportedBy : undefined,
+        vault: typeof obj.vault === "string" ? obj.vault : undefined,
+        newerVersion: version !== undefined && version > exports.BACKUP_VERSION ? version : undefined,
+    };
+}
+function filterNewEntries(incoming, existing) {
+    const seen = new Set();
+    for (const e of existing)
+        seen.add((0, types_1.entryKey)(e));
+    const fresh = [];
+    let duplicates = 0;
+    for (const e of incoming) {
+        const key = (0, types_1.entryKey)(e);
+        if (seen.has(key)) {
+            duplicates++;
+            continue;
+        }
+        seen.add(key);
+        fresh.push(e);
+    }
+    return { fresh, duplicates };
+}
+function backupNameMeta(name) {
+    const m = BACKUP_NAME.exec(name);
+    if (!m)
+        return null;
+    return { date: m[1], device: m[2] };
+}
+function shouldAutoBackup(names, intervalDays, currentDevice, today = Date.now()) {
+    if (intervalDays <= 0)
+        return false;
+    let latest = -Infinity;
+    for (const name of names) {
+        const meta = backupNameMeta(name);
+        if (!meta)
+            continue;
+        if (meta.device !== undefined && meta.device !== currentDevice)
+            continue;
+        const day = utcDay(meta.date);
+        if (day !== null && day > latest)
+            latest = day;
+    }
+    if (latest === -Infinity)
+        return true;
+    const d = new Date(today);
+    const todayDay = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+    return Math.floor((todayDay - latest) / 86400000) >= intervalDays;
+}
+function isCount(v) {
+    return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+}
+function tuple(v) {
+    if (!Array.isArray(v) || v.length !== 2)
+        return null;
+    const [a, b] = v;
+    return isCount(a) && isCount(b) ? [a, b] : null;
+}
+function normalizeEntry(item) {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+        return null;
+    const o = item;
+    if (typeof o.t !== "number" || !Number.isSafeInteger(o.t) || o.t < 0)
+        return null;
+    if (typeof o.p !== "string" || o.p.length === 0 || o.p.length > 4096)
+        return null;
+    const add = tuple(o.add);
+    const del = tuple(o.del);
+    if (!add || !del)
+        return null;
+    if (typeof o.src !== "string" || !SRCS.has(o.src))
+        return null;
+    return { t: o.t, p: o.p, add, del, src: o.src };
+}
+function utcDay(key) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    if (!m)
+        return null;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    const ts = Date.UTC(y, mo - 1, d);
+    const check = new Date(ts);
+    if (check.getUTCFullYear() !== y ||
+        check.getUTCMonth() !== mo - 1 ||
+        check.getUTCDate() !== d) {
+        return null;
+    }
+    return ts;
+}
+
+};
+__modules["backupModal.ts"] = function (module, exports, require) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.RestoreConfirmModal = exports.BackupPickerModal = void 0;
+const obsidian_1 = require("obsidian");
+const i18n_1 = require("./i18n");
+class BackupPickerModal extends obsidian_1.SuggestModal {
+    constructor(app, candidates, onChoose) {
+        super(app);
+        this.candidates = candidates;
+        this.onChoose = onChoose;
+        this.setPlaceholder((0, i18n_1.L)().restorePickPlaceholder);
+    }
+    getSuggestions(query) {
+        const q = query.trim().toLowerCase();
+        if (!q)
+            return this.candidates;
+        return this.candidates.filter((c) => c.name.toLowerCase().includes(q));
+    }
+    renderSuggestion(item, el) {
+        el.createDiv({ text: item.name });
+        const meta = [item.date, item.device ? `${(0, i18n_1.L)().restoreDevice} ${item.device}` : ""]
+            .filter(Boolean)
+            .join(" · ");
+        if (meta)
+            el.createDiv({ cls: "setting-item-description", text: meta });
+    }
+    onChooseSuggestion(item) {
+        this.onChoose(item);
+    }
+}
+exports.BackupPickerModal = BackupPickerModal;
+class RestoreConfirmModal extends obsidian_1.Modal {
+    constructor(app, opts) {
+        super(app);
+        this.opts = opts;
+    }
+    onOpen() {
+        const { contentEl } = this;
+        const { parsed } = this.opts;
+        const total = parsed.entries.length + parsed.bad;
+        contentEl.createEl("h2", { text: (0, i18n_1.L)().restoreTitle });
+        contentEl.createEl("p", {
+            text: (0, i18n_1.L)().restoreSummary(total, this.opts.fresh, this.opts.duplicates, parsed.bad),
+        });
+        contentEl.createEl("p", { text: `${(0, i18n_1.L)().restoreSource}: ${this.opts.fileName}` });
+        if (parsed.vault) {
+            contentEl.createEl("p", { text: `${(0, i18n_1.L)().restoreVault}: ${parsed.vault}` });
+        }
+        if (parsed.exportedBy) {
+            contentEl.createEl("p", { text: `${(0, i18n_1.L)().restoreDevice}: ${parsed.exportedBy}` });
+        }
+        if (parsed.exportedBy && parsed.exportedBy !== this.opts.currentDevice) {
+            contentEl.createEl("p", { cls: "setting-item-description", text: (0, i18n_1.L)().restoreOtherDevice });
+        }
+        if (parsed.vault && parsed.vault !== this.opts.currentVault) {
+            contentEl.createEl("p", { cls: "setting-item-description", text: (0, i18n_1.L)().restoreOtherVault });
+        }
+        if (parsed.newerVersion !== undefined) {
+            contentEl.createEl("p", {
+                cls: "setting-item-description",
+                text: (0, i18n_1.L)().restoreNewerVersion(parsed.newerVersion),
+            });
+        }
+        contentEl.createEl("p", { cls: "setting-item-description", text: (0, i18n_1.L)().restoreSafety });
+        new obsidian_1.Setting(contentEl)
+            .addButton((b) => b.setButtonText((0, i18n_1.L)().cancel).onClick(() => this.close()))
+            .addButton((b) => b
+            .setButtonText((0, i18n_1.L)().restoreConfirm)
+            .setCta()
+            .onClick(() => {
+            this.close();
+            this.opts.onConfirm();
+        }));
+    }
+    onClose() {
+        this.contentEl.empty();
+    }
+}
+exports.RestoreConfirmModal = RestoreConfirmModal;
+
+};
 __modules["counter.ts"] = function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -146,6 +364,7 @@ const zh = {
     cmdYear: "生成年度报告",
     cmdCsv: "导出账本 CSV",
     cmdBackup: "导出账本备份",
+    cmdRestore: "从备份恢复账本",
     cmdSyncFm: "把字数写入当前笔记属性",
     cmdAudit: "检查账本完整性",
     noticeBaseline: (n) => `已建立快照：${n} 个文件。从今天起开始记账。`,
@@ -159,6 +378,15 @@ const zh = {
     noticeCsvFail: (e) => `导出 CSV 失败：${e}`,
     noticeBackup: (p, n) => `账本已导出：${p}（${n} 条）`,
     noticeBackupFail: (e) => `导出失败：${e}`,
+    noticeRestoreEmpty: "备份目录里没有可导入的 JSON 文件。",
+    noticeRestoreInvalid: (e) => `备份无法读取：${e}`,
+    noticeRestoreNoEntries: "备份里没有有效条目。",
+    noticeRestoreNothing: (total, dup, bad) => `备份共 ${total} 条，全部重复，没有需要导入的内容（重复 ${dup}，坏行 ${bad}）。`,
+    noticeRestoreDone: (added, dup, bad, safety) => `已导入 ${added} 条（跳过重复 ${dup}，坏行 ${bad}）。` +
+        (safety ? `安全备份：${safety}` : ""),
+    noticeRestoreFail: (e) => `导入失败：${e}`,
+    noticeRestoreCancelled: "导入前的安全备份失败，已取消导入。",
+    noticeAutoBackup: (p) => `已自动备份账本到 ${p}`,
     noticeLedgerEmpty: "账本还是空的，没有可导出的内容。",
     noticeFmWritten: (k, n) => `已写入 ${k}: ${n}`,
     noticeFmLatest: (k, n) => `${k} 已经是最新（${n}）`,
@@ -169,11 +397,24 @@ const zh = {
     noticeAuditBad: (n, p) => `账本体检发现 ${n} 项问题，已写入 ${p}`,
     noticeRepair: (n) => `账本末尾发现截断，已丢弃 ${n} 个字符的残行后继续记录。`,
     statusToday: (c, l) => `今日 +${c}字 +${l}词`,
+    statusTodayCombined: (n) => `今日 +${n}`,
     statusTodayZero: "今日 +0",
     statusTitleWeek: (c, l) => `本周 汉字 ${c} / 词 ${l}`,
     statusTitleStreak: (n) => `连续 ${n} 天`,
     statusTitleTotal: (c, l) => `全库 汉字 ${c} / 词 ${l}`,
     statusTitleClick: "点击打开面板",
+    restorePickPlaceholder: "搜索备份文件…",
+    restoreTitle: "导入账本备份",
+    restoreSummary: (total, fresh, dup, bad) => `备份共 ${total} 条：可新增 ${fresh}，重复 ${dup}，无法解析 ${bad}。`,
+    restoreSource: "备份文件",
+    restoreVault: "来源库",
+    restoreDevice: "设备",
+    restoreOtherDevice: "这份备份由另一台设备导出。如果本机也记录过同一段写作，可能出现重复计数；导入后建议跑一次账本体检。",
+    restoreOtherVault: "这份备份来自另一个库，路径可能对不上；确认后再导入。",
+    restoreNewerVersion: (v) => `备份由更新版本的 Abacus 生成（v${v}），已按当前格式导入已知字段。`,
+    restoreSafety: "导入前会先把当前账本导出到备份目录（文件名带 -pre-restore 时间后缀）。",
+    restoreConfirm: "导入",
+    cancel: "取消",
     sCounter: "统计口径",
     sCounterDesc: "改动这里会重建快照（不产生写作记录），已记录的账本不受影响。",
     sFrontmatter: "计入 YAML frontmatter",
@@ -190,7 +431,7 @@ const zh = {
     sPropKeyDesc: "默认 words。只写汉字数，英文词去账本里看。",
     sDisplay: "显示",
     sLatinPrimary: "主指标包含英文词",
-    sLatinPrimaryDesc: "关闭时状态栏只看汉字；两个分量在面板里始终分开显示。",
+    sLatinPrimaryDesc: "开启后状态栏的今日数字把英文词并入汉字，只显示一个合计；关闭时分别显示汉字和英文词。面板始终分开显示两个分量。",
     sGoals: "目标",
     sGoalsDesc: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
     sDailyGoal: "每日目标（汉字）",
@@ -218,6 +459,11 @@ const zh = {
     sBackup: "导出账本备份",
     sBackupDesc: "把账本合并成一个 JSON 写入下面这个目录。账本本体在 .obsidian 里不一定被同步，这份才是异地备份。",
     sBackupFolder: "账本备份目录",
+    sRestore: "从备份恢复",
+    sRestoreDesc: "从备份目录选择一个 JSON，合并回账本；重复事件自动跳过。导入前会先导出当前账本。",
+    sRestoreBtn: "选择备份",
+    sAutoBackup: "自动备份间隔（天）",
+    sAutoBackupDesc: "0 表示关闭。启动时如果本机最近一份备份早于这个天数，会自动导出一份完整账本。",
 };
 const en = {
     viewName: "Writing stats",
@@ -256,6 +502,7 @@ const en = {
     cmdYear: "Generate yearly report",
     cmdCsv: "Export ledger as CSV",
     cmdBackup: "Export ledger backup",
+    cmdRestore: "Restore ledger from backup",
     cmdSyncFm: "Write word count to current note",
     cmdAudit: "Check ledger integrity",
     noticeBaseline: (n) => `Snapshot built: ${n} files. Recording starts today.`,
@@ -269,6 +516,15 @@ const en = {
     noticeCsvFail: (e) => `Failed to export CSV: ${e}`,
     noticeBackup: (p, n) => `Ledger exported: ${p} (${n} entries)`,
     noticeBackupFail: (e) => `Export failed: ${e}`,
+    noticeRestoreEmpty: "No backup JSON found in the backup folder.",
+    noticeRestoreInvalid: (e) => `Cannot read backup: ${e}`,
+    noticeRestoreNoEntries: "This backup has no valid entries.",
+    noticeRestoreNothing: (total, dup, bad) => `All ${total} entries are already present; nothing to import (${dup} duplicates, ${bad} bad lines).`,
+    noticeRestoreDone: (added, dup, bad, safety) => `Imported ${added} entries (${dup} duplicates skipped, ${bad} bad lines).` +
+        (safety ? ` Safety backup: ${safety}` : ""),
+    noticeRestoreFail: (e) => `Import failed: ${e}`,
+    noticeRestoreCancelled: "Safety backup failed; the import was cancelled.",
+    noticeAutoBackup: (p) => `Ledger auto-backed up to ${p}`,
     noticeLedgerEmpty: "The ledger is still empty.",
     noticeFmWritten: (k, n) => `Wrote ${k}: ${n}`,
     noticeFmLatest: (k, n) => `${k} is already up to date (${n})`,
@@ -279,11 +535,24 @@ const en = {
     noticeAuditBad: (n, p) => `Ledger check found ${n} issue(s), written to ${p}`,
     noticeRepair: (n) => `Truncated tail found in the ledger; dropped ${n} characters and continued.`,
     statusToday: (c, l) => `Today +${c}c +${l}w`,
+    statusTodayCombined: (n) => `Today +${n}`,
     statusTodayZero: "Today +0",
     statusTitleWeek: (c, l) => `Week ${c} CJK / ${l} words`,
     statusTitleStreak: (n) => `${n}-day streak`,
     statusTitleTotal: (c, l) => `Vault ${c} CJK / ${l} words`,
     statusTitleClick: "Click to open the panel",
+    restorePickPlaceholder: "Search backup files…",
+    restoreTitle: "Import ledger backup",
+    restoreSummary: (total, fresh, dup, bad) => `${total} entries in backup: ${fresh} new, ${dup} duplicates, ${bad} unreadable.`,
+    restoreSource: "Backup file",
+    restoreVault: "Source vault",
+    restoreDevice: "Device",
+    restoreOtherDevice: "This backup was exported by another device. If this vault also recorded the same writing, counts may double; run a ledger check after importing.",
+    restoreOtherVault: "This backup comes from another vault; paths may not match. Continue only if you are sure.",
+    restoreNewerVersion: (v) => `Created by a newer Abacus (v${v}); known fields will be imported.`,
+    restoreSafety: "The current ledger will first be exported to the backup folder with a -pre-restore time suffix.",
+    restoreConfirm: "Import",
+    cancel: "Cancel",
     sCounter: "Counting rules",
     sCounterDesc: "Changing these rebuilds the snapshot (no writing is recorded). The ledger is untouched.",
     sFrontmatter: "Include YAML frontmatter",
@@ -300,7 +569,7 @@ const en = {
     sPropKeyDesc: "Defaults to words. Only the CJK count is written; see the ledger for the split.",
     sDisplay: "Display",
     sLatinPrimary: "Include English words in the primary metric",
-    sLatinPrimaryDesc: "When off, the status bar shows CJK only; the panel always shows both separately.",
+    sLatinPrimaryDesc: "When on, the status bar's today number folds English words into CJK and shows one total; when off, it shows both separately. The panel always shows both components.",
     sGoals: "Goals",
     sGoalsDesc: "Counted in CJK characters. 0 or empty means no goal; with a goal the panel shows a progress bar and the weekly report gains a streak-of-goals row.",
     sDailyGoal: "Daily goal (CJK)",
@@ -328,6 +597,11 @@ const en = {
     sBackup: "Export ledger backup",
     sBackupDesc: "Merge the ledger into one JSON in the folder below. The ledger itself may not be synced, so this is the off-site copy.",
     sBackupFolder: "Backup folder",
+    sRestore: "Restore from backup",
+    sRestoreDesc: "Choose a JSON from the backup folder and merge it back into the ledger; duplicate events are skipped. The current ledger is exported first.",
+    sRestoreBtn: "Choose backup",
+    sAutoBackup: "Auto-backup interval (days)",
+    sAutoBackupDesc: "0 disables it. On startup, if this device's latest backup is older than this many days, a full ledger export is written.",
 };
 let current = zh;
 function setLang(lang) {
@@ -359,6 +633,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.fmtDate = exports.monthKey = void 0;
 const obsidian_1 = require("obsidian");
 const types_1 = require("./types");
+const backup_1 = require("./backup");
+const backupModal_1 = require("./backupModal");
 const store_1 = require("./store");
 Object.defineProperty(exports, "monthKey", { enumerable: true, get: function () { return store_1.monthKey; } });
 const i18n_1 = require("./i18n");
@@ -405,6 +681,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         await this.loadSettings();
         const baseDir = (_a = this.manifest.dir) !== null && _a !== void 0 ? _a : `.obsidian/plugins/${this.manifest.id}`;
         const adapter = this.app.vault.adapter;
+        this.adapter = adapter;
         this.store = new store_1.StatsStore(baseDir, adapter, { version: 1, deviceId: deviceId() });
         await this.store.load();
         const io = {
@@ -457,6 +734,11 @@ class AbacusPlugin extends obsidian_1.Plugin {
             id: "export-ledger",
             name: (0, i18n_1.L)().cmdBackup,
             callback: () => void this.exportLedger(),
+        });
+        this.addCommand({
+            id: "restore-ledger",
+            name: (0, i18n_1.L)().cmdRestore,
+            callback: () => void this.restoreLedger(),
         });
         this.addCommand({
             id: "year-report",
@@ -530,6 +812,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         await this.refresh();
         void this.autoWeeklyReport();
         void this.checkLedgerHealth();
+        void this.autoBackupLedger();
     }
     async rebuild() {
         new obsidian_1.Notice((0, i18n_1.L)().noticeRebuilding);
@@ -582,11 +865,16 @@ class AbacusPlugin extends obsidian_1.Plugin {
         if (!this.statusBar)
             return;
         const t = (0, i18n_1.L)();
-        const today = data.todayAdd.cjk + data.todayAdd.lat;
+        const primary = (0, types_1.primaryOf)(data.todayAdd, this.settings.includeLatinInPrimary);
         const warn = data.health && !data.health.ok ? " ⚠" : "";
         const c = data.todayAdd.cjk.toLocaleString("en-US");
         const l = data.todayAdd.lat.toLocaleString("en-US");
-        this.statusBar.setText((today === 0 ? t.statusTodayZero : t.statusToday(c, l)) + warn);
+        const text = primary === 0
+            ? t.statusTodayZero
+            : this.settings.includeLatinInPrimary
+                ? t.statusTodayCombined(primary.toLocaleString("en-US"))
+                : t.statusToday(c, l);
+        this.statusBar.setText(text + warn);
         this.statusBar.title =
             t.statusTitleWeek(data.weekAdd.cjk.toLocaleString("en-US"), data.weekAdd.lat.toLocaleString("en-US")) +
                 "\n" +
@@ -995,25 +1283,146 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const folder = (0, obsidian_1.normalizePath)(this.settings.reportFolder || "归档/统计归档");
         return (0, obsidian_1.normalizePath)(`${folder}/周报 ${(0, stats_1.isoWeek)(weekStart)}.md`);
     }
-    async exportLedger() {
+    async exportLedger(notify = true, tag = "") {
         const months = await this.store.listLedgerMonths();
         if (months.length === 0) {
-            new obsidian_1.Notice((0, i18n_1.L)().noticeLedgerEmpty);
-            return;
+            if (notify)
+                new obsidian_1.Notice((0, i18n_1.L)().noticeLedgerEmpty);
+            return null;
         }
         const all = [];
         for (const ym of months)
             all.push(...(await this.store.readMonth(ym)));
-        const folder = (0, obsidian_1.normalizePath)(this.settings.backupFolder || "归档/统计归档/账本备份");
-        const stamp = (0, store_1.dayKey)(Date.now());
-        const path = (0, obsidian_1.normalizePath)(`${folder}/账本备份 ${stamp}.json`);
+        const path = this.backupPath(tag);
         try {
-            await this.writeVaultFile(path, JSON.stringify({ exportedAt: new Date().toISOString(), months, count: all.length, entries: all }));
-            new obsidian_1.Notice((0, i18n_1.L)().noticeBackup(path, all.length));
+            await this.writeVaultFile(path, JSON.stringify({
+                format: backup_1.BACKUP_FORMAT,
+                version: backup_1.BACKUP_VERSION,
+                exportedAt: new Date().toISOString(),
+                exportedBy: deviceId(),
+                vault: this.app.vault.getName(),
+                months,
+                count: all.length,
+                entries: all,
+            }));
+            if (notify)
+                new obsidian_1.Notice((0, i18n_1.L)().noticeBackup(path, all.length));
+            return path;
         }
         catch (err) {
             new obsidian_1.Notice((0, i18n_1.L)().noticeBackupFail(err.message));
+            return null;
         }
+    }
+    backupPath(tag = "") {
+        const folder = (0, obsidian_1.normalizePath)(this.settings.backupFolder || "归档/统计归档/账本备份");
+        const now = new Date();
+        const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+        const suffix = tag ? `-${tag}-${time}` : "";
+        return (0, obsidian_1.normalizePath)(`${folder}/账本备份 ${(0, store_1.dayKey)(now.getTime())}${suffix}.${deviceId()}.json`);
+    }
+    async listBackupCandidates() {
+        const folder = (0, obsidian_1.normalizePath)(this.settings.backupFolder || "归档/统计归档/账本备份");
+        let files = [];
+        try {
+            files = (await this.adapter.list(folder)).files;
+        }
+        catch (_a) {
+            return [];
+        }
+        return files
+            .map((f) => { var _a; return (_a = f.split("/").pop()) !== null && _a !== void 0 ? _a : ""; })
+            .filter((name) => name.toLowerCase().endsWith(".json"))
+            .map((name) => {
+            const meta = (0, backup_1.backupNameMeta)(name);
+            return {
+                name,
+                path: (0, obsidian_1.normalizePath)(`${folder}/${name}`),
+                date: meta === null || meta === void 0 ? void 0 : meta.date,
+                device: meta === null || meta === void 0 ? void 0 : meta.device,
+            };
+        })
+            .sort((a, b) => b.name.localeCompare(a.name));
+    }
+    async restoreLedger() {
+        const candidates = await this.listBackupCandidates();
+        if (candidates.length === 0) {
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRestoreEmpty);
+            return;
+        }
+        new backupModal_1.BackupPickerModal(this.app, candidates, (candidate) => {
+            void this.importBackup(candidate);
+        }).open();
+    }
+    async importBackup(candidate) {
+        let parsed;
+        try {
+            parsed = (0, backup_1.parseBackup)(await this.adapter.read(candidate.path));
+        }
+        catch (err) {
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRestoreInvalid(err.message), 10000);
+            return;
+        }
+        if (parsed.entries.length === 0) {
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRestoreNoEntries, 10000);
+            return;
+        }
+        const months = await this.store.listLedgerMonths();
+        const existing = await this.store.readMonths(months);
+        const { fresh, duplicates } = (0, backup_1.filterNewEntries)(parsed.entries, existing);
+        if (fresh.length === 0) {
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRestoreNothing(parsed.entries.length + parsed.bad, duplicates, parsed.bad), 10000);
+            return;
+        }
+        new backupModal_1.RestoreConfirmModal(this.app, {
+            fileName: candidate.name,
+            parsed,
+            fresh: fresh.length,
+            duplicates,
+            currentDevice: deviceId(),
+            currentVault: this.app.vault.getName(),
+            onConfirm: () => {
+                void this.applyRestore(fresh, parsed, duplicates, months.length > 0);
+            },
+        }).open();
+    }
+    async applyRestore(fresh, parsed, duplicates, hadLedger) {
+        const safety = hadLedger ? await this.exportLedger(false, "pre-restore") : null;
+        if (hadLedger && !safety) {
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRestoreCancelled, 10000);
+            return;
+        }
+        try {
+            const res = await this.store.importEntries(fresh);
+            this.invalidate();
+            await this.refresh();
+            void this.refreshHealth();
+            if (this.store.size() === 0)
+                await this.rebuild();
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRestoreDone(res.added, duplicates, parsed.bad + res.badLines, safety), 12000);
+        }
+        catch (err) {
+            new obsidian_1.Notice((0, i18n_1.L)().noticeRestoreFail(err.message), 10000);
+        }
+    }
+    async autoBackupLedger() {
+        var _a;
+        const days = (_a = this.settings.backupIntervalDays) !== null && _a !== void 0 ? _a : 0;
+        if (days <= 0)
+            return;
+        const folder = (0, obsidian_1.normalizePath)(this.settings.backupFolder || "归档/统计归档/账本备份");
+        let names = [];
+        try {
+            names = (await this.adapter.list(folder)).files.map((f) => { var _a; return (_a = f.split("/").pop()) !== null && _a !== void 0 ? _a : ""; });
+        }
+        catch (_b) {
+            names = [];
+        }
+        if (!(0, backup_1.shouldAutoBackup)(names, days, deviceId()))
+            return;
+        const path = await this.exportLedger(false);
+        if (path)
+            new obsidian_1.Notice((0, i18n_1.L)().noticeAutoBackup(path), 6000);
     }
     async ensureFolder(folder) {
         if (!folder || this.app.vault.getAbstractFileByPath(folder))
@@ -1689,6 +2098,10 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
             .setName(t.sBackup)
             .setDesc(t.sBackupDesc)
             .addButton((b) => b.setButtonText(t.sExport).onClick(() => void this.plugin.exportLedger()));
+        new obsidian_1.Setting(containerEl)
+            .setName(t.sRestore)
+            .setDesc(t.sRestoreDesc)
+            .addButton((b) => b.setButtonText(t.sRestoreBtn).onClick(() => void this.plugin.restoreLedger()));
         new obsidian_1.Setting(containerEl).setName(t.sBackupFolder).addText((c) => c
             .setPlaceholder("归档/统计归档/账本备份")
             .setValue(s.backupFolder)
@@ -1696,6 +2109,19 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
             s.backupFolder = v.trim() || "归档/统计归档/账本备份";
             await this.plugin.applySettings(["display"]);
         }));
+        new obsidian_1.Setting(containerEl)
+            .setName(t.sAutoBackup)
+            .setDesc(t.sAutoBackupDesc)
+            .addText((c) => {
+            var _a;
+            c.inputEl.type = "number";
+            c.setPlaceholder("7")
+                .setValue(String((_a = s.backupIntervalDays) !== null && _a !== void 0 ? _a : 0))
+                .onChange(async (v) => {
+                s.backupIntervalDays = Math.max(0, Math.floor(Number(v) || 0));
+                await this.plugin.applySettings(["display"]);
+            });
+        });
     }
 }
 exports.StatsSettingTab = StatsSettingTab;
@@ -1916,6 +2342,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ZERO = exports.StatsStore = void 0;
 exports.parseLedgerReport = parseLedgerReport;
 exports.parseLedger = parseLedger;
+exports.dedupeEntries = dedupeEntries;
 exports.repairTail = repairTail;
 exports.monthKey = monthKey;
 exports.dayKey = dayKey;
@@ -2092,13 +2519,53 @@ class StatsStore {
             catch (_a) {
             }
         }
-        return out;
+        return dedupeEntries(out);
     }
     async readMonths(yms) {
         const out = [];
         for (const ym of yms)
             out.push(...(await this.readMonth(ym)));
         return out;
+    }
+    async importEntries(entries) {
+        if (entries.length === 0)
+            return { added: 0, months: [], badLines: 0 };
+        const byMonth = new Map();
+        for (const e of entries) {
+            const ym = monthKey(e.t);
+            const arr = byMonth.get(ym);
+            if (arr)
+                arr.push(e);
+            else
+                byMonth.set(ym, [e]);
+        }
+        await this.ensureDir("stats");
+        await this.ensureDir(LEDGER_REL);
+        let added = 0;
+        let badLines = 0;
+        const months = [];
+        for (const [ym, incoming] of byMonth) {
+            const full = this.path(`${LEDGER_REL}/${ym}.imported.${this.deviceId}.jsonl`);
+            let prev = [];
+            try {
+                const parsed = parseLedgerReport(await this.adapter.read(full));
+                prev = parsed.entries;
+                badLines += parsed.bad;
+            }
+            catch (_a) {
+                prev = [];
+            }
+            const existing = dedupeEntries(prev);
+            const merged = dedupeEntries([...existing, ...incoming]);
+            const fresh = merged.length - existing.length;
+            if (fresh <= 0)
+                continue;
+            merged.sort((a, b) => a.t - b.t);
+            await this.adapter.write(full, merged.map((e) => JSON.stringify(e)).join("\n") + "\n");
+            added += fresh;
+            months.push(ym);
+        }
+        return { added, months, badLines };
     }
     async listMonthFiles(ym) {
         const re = new RegExp(`^${ym}(\\..+)?\\.jsonl$`);
@@ -2152,7 +2619,7 @@ class StatsStore {
                 result.badLines += parsed.bad;
                 result.totalEntries += parsed.entries.length;
                 for (const e of parsed.entries) {
-                    const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
+                    const key = (0, types_1.entryKey)(e);
                     if (seen.has(key))
                         result.duplicates++;
                     else
@@ -2172,7 +2639,7 @@ class StatsStore {
             result.problems.push(`末尾缺换行：${result.truncated.join("、")}（疑似被截断，下次追加会自动修复）`);
         }
         if (result.duplicates > 0)
-            result.problems.push(`${result.duplicates} 条重复事件（同一条被写了两次）`);
+            result.problems.push(`${result.duplicates} 条重复事件（统计时已按一条计算）`);
         if (result.future > 0)
             result.problems.push(`${result.future} 条时间戳在未来（时钟或时区不正确）`);
         return result;
@@ -2222,6 +2689,18 @@ function parseLedgerReport(raw) {
 function parseLedger(raw) {
     return parseLedgerReport(raw).entries;
 }
+function dedupeEntries(entries) {
+    const seen = new Set();
+    const out = [];
+    for (const e of entries) {
+        const key = (0, types_1.entryKey)(e);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        out.push(e);
+    }
+    return out;
+}
 function repairTail(prev) {
     if (!prev || prev.endsWith("\n"))
         return { text: prev, dropped: 0 };
@@ -2258,6 +2737,7 @@ exports.subVec = subVec;
 exports.clampVec = clampVec;
 exports.isZeroVec = isZeroVec;
 exports.primaryOf = primaryOf;
+exports.entryKey = entryKey;
 exports.entryAddVec = entryAddVec;
 exports.entryDelVec = entryDelVec;
 exports.ZERO = Object.freeze({ cjk: 0, lat: 0 });
@@ -2294,7 +2774,11 @@ exports.DEFAULT_SETTINGS = {
     reportFolder: "归档/统计归档",
     autoWeeklyReport: true,
     backupFolder: "归档/统计归档/账本备份",
+    backupIntervalDays: 7,
 };
+function entryKey(e) {
+    return `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
+}
 function entryAddVec(e) {
     return vec(e.add[0], e.add[1]);
 }

@@ -1,6 +1,17 @@
 import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, normalizePath } from "obsidian";
 import type { FileStatInfo, LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "./types";
-import { addVec, DEFAULT_SETTINGS, isZeroVec, vec } from "./types";
+import { addVec, DEFAULT_SETTINGS, isZeroVec, primaryOf, vec } from "./types";
+import {
+  BACKUP_FORMAT,
+  BACKUP_VERSION,
+  backupNameMeta,
+  filterNewEntries,
+  parseBackup,
+  shouldAutoBackup,
+  type BackupCandidate,
+  type ParsedBackup,
+} from "./backup";
+import { BackupPickerModal, RestoreConfirmModal } from "./backupModal";
 import { StatsStore, dayKey, monthKey, type LedgerAudit } from "./store";
 import { detectLang, L, setLang } from "./i18n";
 import { Scanner } from "./scanner";
@@ -75,6 +86,7 @@ export default class AbacusPlugin extends Plugin {
   private selectedProject: string | null = null;
   private fmQueue = new Set<string>();
   private fmTimer: number | null = null;
+  private adapter!: StatsAdapter;
 
   async onload(): Promise<void> {
     setLang(detectLang());
@@ -82,6 +94,7 @@ export default class AbacusPlugin extends Plugin {
 
     const baseDir = this.manifest.dir ?? `.obsidian/plugins/${this.manifest.id}`;
     const adapter = this.app.vault.adapter as unknown as StatsAdapter;
+    this.adapter = adapter;
     this.store = new StatsStore(baseDir, adapter, { version: 1, deviceId: deviceId() });
     await this.store.load();
 
@@ -144,6 +157,11 @@ export default class AbacusPlugin extends Plugin {
       id: "export-ledger",
       name: L().cmdBackup,
       callback: () => void this.exportLedger(),
+    });
+    this.addCommand({
+      id: "restore-ledger",
+      name: L().cmdRestore,
+      callback: () => void this.restoreLedger(),
     });
     this.addCommand({
       id: "year-report",
@@ -227,6 +245,7 @@ export default class AbacusPlugin extends Plugin {
     await this.refresh();
     void this.autoWeeklyReport();
     void this.checkLedgerHealth();
+    void this.autoBackupLedger();
   }
 
   async rebuild(): Promise<void> {
@@ -282,11 +301,17 @@ export default class AbacusPlugin extends Plugin {
   private updateStatusBar(data: PanelData): void {
     if (!this.statusBar) return;
     const t = L();
-    const today = data.todayAdd.cjk + data.todayAdd.lat;
+    const primary = primaryOf(data.todayAdd, this.settings.includeLatinInPrimary);
     const warn = data.health && !data.health.ok ? " ⚠" : "";
     const c = data.todayAdd.cjk.toLocaleString("en-US");
     const l = data.todayAdd.lat.toLocaleString("en-US");
-    this.statusBar.setText((today === 0 ? t.statusTodayZero : t.statusToday(c, l)) + warn);
+    const text =
+      primary === 0
+        ? t.statusTodayZero
+        : this.settings.includeLatinInPrimary
+          ? t.statusTodayCombined(primary.toLocaleString("en-US"))
+          : t.statusToday(c, l);
+    this.statusBar.setText(text + warn);
     this.statusBar.title =
       t.statusTitleWeek(
         data.weekAdd.cjk.toLocaleString("en-US"),
@@ -738,27 +763,167 @@ export default class AbacusPlugin extends Plugin {
    * 账本本身住在 .obsidian 下，remotely-save 不一定会同步它；
    * 这个文件是真正意义上的异地备份。
    */
-  async exportLedger(): Promise<void> {
+  async exportLedger(notify = true, tag = ""): Promise<string | null> {
     const months = await this.store.listLedgerMonths();
     if (months.length === 0) {
-      new Notice(L().noticeLedgerEmpty);
-      return;
+      if (notify) new Notice(L().noticeLedgerEmpty);
+      return null;
     }
     const all: LedgerEntry[] = [];
     for (const ym of months) all.push(...(await this.store.readMonth(ym)));
 
-    const folder = normalizePath(this.settings.backupFolder || "归档/统计归档/账本备份");
-    const stamp = dayKey(Date.now()); // 用本地日期，别用 UTC
-    const path = normalizePath(`${folder}/账本备份 ${stamp}.json`);
+    const path = this.backupPath(tag);
     try {
       await this.writeVaultFile(
         path,
-        JSON.stringify({ exportedAt: new Date().toISOString(), months, count: all.length, entries: all })
+        JSON.stringify({
+          format: BACKUP_FORMAT,
+          version: BACKUP_VERSION,
+          exportedAt: new Date().toISOString(),
+          exportedBy: deviceId(),
+          vault: this.app.vault.getName(),
+          months,
+          count: all.length,
+          entries: all,
+        })
       );
-      new Notice(L().noticeBackup(path, all.length));
+      if (notify) new Notice(L().noticeBackup(path, all.length));
+      return path;
     } catch (err) {
       new Notice(L().noticeBackupFail((err as Error).message));
+      return null;
     }
+  }
+
+  /**
+   * 备份文件名带设备后缀：多设备同时写同一目录时，不互相覆盖。
+   * 安全备份额外带时间后缀，避免覆盖用户正在恢复的那份源备份。
+   */
+  private backupPath(tag = ""): string {
+    const folder = normalizePath(this.settings.backupFolder || "归档/统计归档/账本备份");
+    const now = new Date();
+    const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(
+      2,
+      "0"
+    )}${String(now.getSeconds()).padStart(2, "0")}`;
+    const suffix = tag ? `-${tag}-${time}` : "";
+    return normalizePath(
+      `${folder}/账本备份 ${dayKey(now.getTime())}${suffix}.${deviceId()}.json`
+    );
+  }
+
+  private async listBackupCandidates(): Promise<BackupCandidate[]> {
+    const folder = normalizePath(this.settings.backupFolder || "归档/统计归档/账本备份");
+    let files: string[] = [];
+    try {
+      files = (await this.adapter.list(folder)).files;
+    } catch {
+      return [];
+    }
+    return files
+      .map((f) => f.split("/").pop() ?? "")
+      .filter((name) => name.toLowerCase().endsWith(".json"))
+      .map((name) => {
+        const meta = backupNameMeta(name);
+        return {
+          name,
+          path: normalizePath(`${folder}/${name}`),
+          date: meta?.date,
+          device: meta?.device,
+        };
+      })
+      .sort((a, b) => b.name.localeCompare(a.name));
+  }
+
+  async restoreLedger(): Promise<void> {
+    const candidates = await this.listBackupCandidates();
+    if (candidates.length === 0) {
+      new Notice(L().noticeRestoreEmpty);
+      return;
+    }
+    new BackupPickerModal(this.app, candidates, (candidate) => {
+      void this.importBackup(candidate);
+    }).open();
+  }
+
+  private async importBackup(candidate: BackupCandidate): Promise<void> {
+    let parsed: ParsedBackup;
+    try {
+      parsed = parseBackup(await this.adapter.read(candidate.path));
+    } catch (err) {
+      new Notice(L().noticeRestoreInvalid((err as Error).message), 10000);
+      return;
+    }
+    if (parsed.entries.length === 0) {
+      new Notice(L().noticeRestoreNoEntries, 10000);
+      return;
+    }
+
+    const months = await this.store.listLedgerMonths();
+    const existing = await this.store.readMonths(months);
+    const { fresh, duplicates } = filterNewEntries(parsed.entries, existing);
+
+    if (fresh.length === 0) {
+      new Notice(
+        L().noticeRestoreNothing(parsed.entries.length + parsed.bad, duplicates, parsed.bad),
+        10000
+      );
+      return;
+    }
+
+    new RestoreConfirmModal(this.app, {
+      fileName: candidate.name,
+      parsed,
+      fresh: fresh.length,
+      duplicates,
+      currentDevice: deviceId(),
+      currentVault: this.app.vault.getName(),
+      onConfirm: () => {
+        void this.applyRestore(fresh, parsed, duplicates, months.length > 0);
+      },
+    }).open();
+  }
+
+  private async applyRestore(
+    fresh: LedgerEntry[],
+    parsed: ParsedBackup,
+    duplicates: number,
+    hadLedger: boolean
+  ): Promise<void> {
+    const safety = hadLedger ? await this.exportLedger(false, "pre-restore") : null;
+    if (hadLedger && !safety) {
+      new Notice(L().noticeRestoreCancelled, 10000);
+      return;
+    }
+
+    try {
+      const res = await this.store.importEntries(fresh);
+      this.invalidate();
+      await this.refresh();
+      void this.refreshHealth();
+      if (this.store.size() === 0) await this.rebuild();
+      new Notice(
+        L().noticeRestoreDone(res.added, duplicates, parsed.bad + res.badLines, safety),
+        12000
+      );
+    } catch (err) {
+      new Notice(L().noticeRestoreFail((err as Error).message), 10000);
+    }
+  }
+
+  private async autoBackupLedger(): Promise<void> {
+    const days = this.settings.backupIntervalDays ?? 0;
+    if (days <= 0) return;
+    const folder = normalizePath(this.settings.backupFolder || "归档/统计归档/账本备份");
+    let names: string[] = [];
+    try {
+      names = (await this.adapter.list(folder)).files.map((f) => f.split("/").pop() ?? "");
+    } catch {
+      names = [];
+    }
+    if (!shouldAutoBackup(names, days, deviceId())) return;
+    const path = await this.exportLedger(false);
+    if (path) new Notice(L().noticeAutoBackup(path), 6000);
   }
 
   private async ensureFolder(folder: string): Promise<void> {

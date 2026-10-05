@@ -35,6 +35,8 @@ Every statistic — day, week, month, project, streak — is a view over the led
 - **Weekly / yearly reports**: written into your vault; the yearly one includes an HTML heatmap
 - **CSV export**: daily totals for Excel or scripting
 - **Ledger self-check**: bad lines, truncation, duplicates, future timestamps — shown persistently
+- **Restorable ledger**: merge a backup JSON back into the ledger, deduplicating events; the current ledger is backed up first
+- **Auto-backup**: export a full ledger on startup when the interval has elapsed
 - **Multi-device safe**: the ledger is split per device, so sync conflicts don't overwrite each other
 - **Optional frontmatter write-back**: expose the count to Bases / Dataview
 
@@ -55,6 +57,7 @@ Not in the community store yet. Either:
 | Generate this week's / last week's report | Written into the report folder |
 | Generate yearly report | Heatmap, per-month, projects, top files |
 | Export ledger backup | Merged JSON into a normal vault folder |
+| Restore ledger from backup | Pick a JSON backup and merge it back (duplicates skipped) |
 | Export ledger as CSV | Daily totals |
 | Write word count to current note | One-off frontmatter write |
 | Check ledger integrity | Audit report |
@@ -71,7 +74,8 @@ Everything is written locally:
 └── stats/
     ├── snapshot.json      stock snapshot (deletable, rebuilt automatically)
     └── ledger/
-        └── 2026-11.<device-id>.jsonl   monthly append-only event log
+        ├── 2026-11.<device-id>.jsonl           monthly append-only event log
+        └── 2026-11.imported.<device-id>.jsonl  events restored from a backup
 ```
 
 Each ledger line contains a **note path** and counts — never note content:
@@ -82,6 +86,8 @@ Each ledger line contains a **note path** and counts — never note content:
 
 The device id is random and lives in `localStorage` (not `data.json`, which would sync and defeat the purpose).
 
+A backup is a merged JSON written to `backupFolder` (default `归档/统计归档/账本备份`). Backup filenames carry the device id; the safety backup taken before an import also carries a timestamp, so it never overwrites the file you are restoring.
+
 ## Design notes
 
 **Append-only ledger.** Each event carries a `src`: `baseline` (first scan, not counted as writing), `edit` (local edit), `scan` (changes found at startup), `delete` (file deleted, not counted as writing).
@@ -91,6 +97,8 @@ The device id is random and lives in `localStorage` (not `data.json`, which woul
 **Torn tail repair.** If a sync conflict left a half line at the end of the ledger, it is dropped before appending — otherwise the new line would fuse with the broken one permanently.
 
 **Low write amplification.** When the file size still matches what we last wrote, we append directly; time is independent of file size. Only a size mismatch falls back to read → repair → rewrite.
+
+**Imports live in their own file.** Restored events go to `*.imported.<device>.jsonl`; the native append-only files stay untouched. Reads deduplicate by event, so importing the same backup twice does not double the counts. The audit still reports raw duplicates for inspection.
 
 ## Development
 
@@ -107,6 +115,7 @@ The build does not use esbuild: it spawns a child process over pipes, which fail
 
 - Markdown only. Notes that render through Dataview, with data living in YAML properties, contribute almost nothing.
 - Counting rules are fixed (CJK per character, English per word, frontmatter and code blocks excluded by default); no custom regex yet.
+- When importing a backup from another device, only exactly identical events (timestamp, path, add/del, source) are deduplicated. The same writing recorded separately on two devices may still double-count; run a ledger check after importing.
 - Generated reports are Chinese-only for now.
 - Desktop and mobile both work in theory; mobile is untested.
 

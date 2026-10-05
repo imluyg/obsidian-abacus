@@ -9,9 +9,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { LedgerEntry, StatsAdapter, StatsSettings, VaultIO, Vec } from "../src/types";
-import { DEFAULT_SETTINGS } from "../src/types";
+import { DEFAULT_SETTINGS, entryKey, primaryOf } from "../src/types";
 import { countMarkdown, diffCounts } from "../src/counter";
-import { StatsStore, parseLedger, parseLedgerReport, repairTail } from "../src/store";
+import {
+  StatsStore,
+  dedupeEntries,
+  parseLedger,
+  parseLedgerReport,
+  repairTail,
+} from "../src/store";
+import { filterNewEntries, parseBackup, shouldAutoBackup } from "../src/backup";
 import { Scanner } from "../src/scanner";
 import {
   byDay,
@@ -306,8 +313,127 @@ async function testLedgerIntegrity(): Promise<void> {
   fs.rmSync(dir2, { recursive: true, force: true });
 }
 
+async function testBackup(): Promise<void> {
+  console.log("\n[5] 备份恢复");
+  const at = (
+    t: number,
+    p: string,
+    add: [number, number],
+    src: LedgerEntry["src"] = "edit"
+  ): LedgerEntry => ({ t, p, add, del: [0, 0], src });
+
+  const raw = JSON.stringify({
+    format: "abacus-ledger-backup",
+    version: 1,
+    exportedAt: "2026-11-15T00:00:00.000Z",
+    exportedBy: "devA",
+    vault: "测试库",
+    entries: [
+      at(1000, "a.md", [10, 0]),
+      at(2000, "b.md", [5, 2]),
+      { t: "bad", p: "x.md", add: [1, 0], del: [0, 0], src: "edit" },
+      { t: 3000, p: "c.md", add: [-1, 0], del: [0, 0], src: "edit" },
+      { t: 4000, p: "d.md", add: [1, 0], del: [0, 0], src: "unknown" },
+    ],
+  });
+  const parsed = parseBackup(raw);
+  check("备份好条目", parsed.entries.length, 2);
+  check("备份坏条目", parsed.bad, 3);
+  check("备份来源设备", parsed.exportedBy, "devA");
+  check("备份来源库", parsed.vault, "测试库");
+
+  const legacy = parseBackup(JSON.stringify({ entries: [at(5000, "e.md", [1, 0])] }));
+  check("旧备份无 format 可读", legacy.entries.length, 1);
+
+  let rejected = false;
+  try {
+    parseBackup(JSON.stringify({ format: "other", entries: [] }));
+  } catch {
+    rejected = true;
+  }
+  check("未知 format 拒绝", rejected, true);
+
+  const existing = [at(1000, "a.md", [10, 0])];
+  const { fresh, duplicates } = filterNewEntries(parsed.entries, existing);
+  check("跨账本去重", duplicates, 1);
+  check("只留新条目", fresh.length, 1);
+
+  check("entryKey 同事件相同", entryKey(at(1, "a.md", [1, 0])), entryKey(at(1, "a.md", [1, 0])));
+  check(
+    "dedupeEntries 去重",
+    dedupeEntries([at(1, "a.md", [1, 0]), at(1, "a.md", [1, 0]), at(2, "b.md", [2, 0])]).length,
+    2
+  );
+
+  // 用当月时间戳，确保落进 monthNow()
+  const now = new Date();
+  const monthBase = new Date(now.getFullYear(), now.getMonth(), 10, 10, 0, 0).getTime();
+  const storeExisting = at(monthBase, "a.md", [10, 0]);
+  const storeFresh = at(monthBase + 1000, "b.md", [5, 2]);
+
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-backup-"));
+  const adapter = new FsAdapter(root);
+  const store = new StatsStore("", adapter, { deviceId: "devA" });
+  await store.load();
+  await store.append([storeExisting]);
+
+  const first = await store.importEntries([storeFresh]);
+  check("首次导入新增", first.added, 1);
+  check("导入后月账本", (await store.readMonth(monthNow())).length, 2);
+  check(
+    "生成 imported 文件",
+    (await adapter.list("stats/ledger")).files.includes(`${monthNow()}.imported.devA.jsonl`),
+    true
+  );
+
+  const again = await store.importEntries([storeFresh]);
+  check("重复导入幂等", again.added, 0);
+  check("重复导入后月账本", (await store.readMonth(monthNow())).length, 2);
+
+  // 另一台设备的文件里再写一遍同一事件，读时应当只算一条
+  await adapter.write(
+    `stats/ledger/${monthNow()}.devB.jsonl`,
+    JSON.stringify(storeExisting) + "\n"
+  );
+  check("跨文件读时去重", (await store.readMonth(monthNow())).length, 2);
+
+  const today = new Date(2026, 10, 15).getTime();
+  check("无备份要备份", shouldAutoBackup([], 7, "devA", today), true);
+  check(
+    "本机今天已备份",
+    shouldAutoBackup(["账本备份 2026-11-15.devA.json"], 7, "devA", today),
+    false
+  );
+  check(
+    "别机今天备份不算",
+    shouldAutoBackup(["账本备份 2026-11-15.devB.json"], 7, "devA", today),
+    true
+  );
+  check(
+    "7 天前要备份",
+    shouldAutoBackup(["账本备份 2026-11-08.devA.json"], 7, "devA", today),
+    true
+  );
+  check(
+    "6 天前不备份",
+    shouldAutoBackup(["账本备份 2026-11-09.devA.json"], 7, "devA", today),
+    false
+  );
+  check("间隔 0 关闭", shouldAutoBackup([], 0, "devA", today), false);
+  check(
+    "旧格式今天算本机",
+    shouldAutoBackup(["账本备份 2026-11-15.json"], 7, "devA", today),
+    false
+  );
+
+  check("主指标不含英文", primaryOf({ cjk: 10, lat: 3 }, false), 10);
+  check("主指标含英文", primaryOf({ cjk: 10, lat: 3 }, true), 13);
+
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 async function testRealVault(vaultRoot: string): Promise<void> {
-  console.log(`\n[5] 真实库扫描：${vaultRoot}`);
+  console.log(`\n[6] 真实库扫描：${vaultRoot}`);
   const dataRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-data-"));
   const settings: StatsSettings = { ...DEFAULT_SETTINGS };
   const store = new StatsStore("", new FsAdapter(dataRoot));
@@ -391,6 +517,7 @@ async function main(): Promise<void> {
   await testStatsHelpers();
   await testLedgerFlow();
   await testLedgerIntegrity();
+  await testBackup();
   const vault = process.argv[2];
   if (vault && fs.existsSync(vault)) await testRealVault(vault);
   await testPerformance();
@@ -400,7 +527,7 @@ async function main(): Promise<void> {
 
 void main();
 async function testPerformance(): Promise<void> {
-  console.log("\n[6] 性能实测（只做参考，不设阈值）");
+  console.log("\n[7] 性能实测（只做参考，不设阈值）");
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-bench-"));
   const adapter = new FsAdapter(root);
   const store = new StatsStore("", adapter);

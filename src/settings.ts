@@ -202,6 +202,13 @@ export class StatsSettingTab extends PluginSettingTab {
       .setDesc(t.sBackupDesc)
       .addButton((b) => b.setButtonText(t.sExport).onClick(() => void this.plugin.exportLedger()));
 
+    new Setting(containerEl)
+      .setName(t.sRestore)
+      .setDesc(t.sRestoreDesc)
+      .addButton((b) =>
+        b.setButtonText(t.sRestoreBtn).onClick(() => void this.plugin.restoreLedger())
+      );
+
     new Setting(containerEl).setName(t.sBackupFolder).addText((c) =>
       c
         .setPlaceholder("归档/统计归档/账本备份")
@@ -211,5 +218,18 @@ export class StatsSettingTab extends PluginSettingTab {
           await this.plugin.applySettings(["display"]);
         })
     );
+
+    new Setting(containerEl)
+      .setName(t.sAutoBackup)
+      .setDesc(t.sAutoBackupDesc)
+      .addText((c) => {
+        c.inputEl.type = "number";
+        c.setPlaceholder("7")
+          .setValue(String(s.backupIntervalDays ?? 0))
+          .onChange(async (v) => {
+            s.backupIntervalDays = Math.max(0, Math.floor(Number(v) || 0));
+            await this.plugin.applySettings(["display"]);
+          });
+      });
   }
 }

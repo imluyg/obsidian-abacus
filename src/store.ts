@@ -1,5 +1,5 @@
 import type { LedgerEntry, StatsAdapter, Vec } from "./types";
-import { isZeroVec, vec, ZERO } from "./types";
+import { entryKey, isZeroVec, vec, ZERO } from "./types";
 
 /**
  * 持久层。两件事分开存：
@@ -219,13 +219,65 @@ export class StatsStore {
         // 单个文件读不了就跳过，别的设备那份还在
       }
     }
-    return out;
+    return dedupeEntries(out);
   }
 
   async readMonths(yms: string[]): Promise<LedgerEntry[]> {
     const out: LedgerEntry[] = [];
     for (const ym of yms) out.push(...(await this.readMonth(ym)));
     return out;
+  }
+
+  /**
+   * 把外部备份合并进账本。
+   *
+   * 写独立的 imported 文件，而不是拼回原生 <ym>.<device>.jsonl：
+   * 原生文件是追加式事实源，导入是低频操作，没有理由让两条路径互相影响。
+   * 同一设备重复导入同一份备份会整写同一个文件，天然幂等。
+   */
+  async importEntries(
+    entries: LedgerEntry[]
+  ): Promise<{ added: number; months: string[]; badLines: number }> {
+    if (entries.length === 0) return { added: 0, months: [], badLines: 0 };
+
+    const byMonth = new Map<string, LedgerEntry[]>();
+    for (const e of entries) {
+      const ym = monthKey(e.t);
+      const arr = byMonth.get(ym);
+      if (arr) arr.push(e);
+      else byMonth.set(ym, [e]);
+    }
+
+    await this.ensureDir("stats");
+    await this.ensureDir(LEDGER_REL);
+
+    let added = 0;
+    let badLines = 0;
+    const months: string[] = [];
+
+    for (const [ym, incoming] of byMonth) {
+      const full = this.path(`${LEDGER_REL}/${ym}.imported.${this.deviceId}.jsonl`);
+      let prev: LedgerEntry[] = [];
+      try {
+        const parsed = parseLedgerReport(await this.adapter.read(full));
+        prev = parsed.entries;
+        badLines += parsed.bad;
+      } catch {
+        prev = [];
+      }
+
+      const existing = dedupeEntries(prev);
+      const merged = dedupeEntries([...existing, ...incoming]);
+      const fresh = merged.length - existing.length;
+      if (fresh <= 0) continue;
+
+      merged.sort((a, b) => a.t - b.t);
+      await this.adapter.write(full, merged.map((e) => JSON.stringify(e)).join("\n") + "\n");
+      added += fresh;
+      months.push(ym);
+    }
+
+    return { added, months, badLines };
   }
 
   /** 某个月的所有账本文件名（含老版本没有设备后缀的） */
@@ -291,7 +343,7 @@ export class StatsStore {
         result.badLines += parsed.bad;
         result.totalEntries += parsed.entries.length;
         for (const e of parsed.entries) {
-          const key = `${e.t}|${e.p}|${e.add[0]},${e.add[1]}|${e.del[0]},${e.del[1]}|${e.src}`;
+          const key = entryKey(e);
           if (seen.has(key)) result.duplicates++;
           else seen.add(key);
           if (e.t > now + 3_600_000) result.future++;
@@ -305,7 +357,7 @@ export class StatsStore {
     if (result.truncated.length > 0) {
       result.problems.push(`末尾缺换行：${result.truncated.join("、")}（疑似被截断，下次追加会自动修复）`);
     }
-    if (result.duplicates > 0) result.problems.push(`${result.duplicates} 条重复事件（同一条被写了两次）`);
+    if (result.duplicates > 0) result.problems.push(`${result.duplicates} 条重复事件（统计时已按一条计算）`);
     if (result.future > 0) result.problems.push(`${result.future} 条时间戳在未来（时钟或时区不正确）`);
     return result;
   }
@@ -366,6 +418,24 @@ export function parseLedgerReport(raw: string): { entries: LedgerEntry[]; bad: n
 
 export function parseLedger(raw: string): LedgerEntry[] {
   return parseLedgerReport(raw).entries;
+}
+
+/**
+ * 读账本时按 entryKey 去重。
+ *
+ * 追加式账本本身不会产生重复；重复来自同步冲突、重复导入、或两台设备
+ * 各写了一份同一备份。统计按一条算，体检仍会报告原始重复，便于排查。
+ */
+export function dedupeEntries(entries: LedgerEntry[]): LedgerEntry[] {
+  const seen = new Set<string>();
+  const out: LedgerEntry[] = [];
+  for (const e of entries) {
+    const key = entryKey(e);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
 }
 
 /**

@@ -43,6 +43,11 @@ const zh = {
   foot: (files: string, time: string) => `${files} 个文件　更新于 ${time}`,
   wordsShort: (n: string) => `词 ${n}`,
   rangeDays: (n: number) => `${n}天`,
+  rangeYear: "全年",
+  rangeCumulative: "累计",
+  cumulativeTip: (month: string, totalC: string, totalL: string, addC: string, addL: string) =>
+    `${month}　累计 汉字 ${totalC} / 英文词 ${totalL}（本月 +${addC} / +${addL}）`,
+  cumulativeNote: "自账本启用起累计新增，不含启用前的存量。",
   heatTitle: (year: number) => `全年热力图 ${year}`,
   heatWeekdays: ["一", "三", "五"],
   monthShort: (m: number) => `${m}月`,
@@ -217,6 +222,11 @@ const en: Dict = {
   foot: (files, time) => `${files} files　updated ${time}`,
   wordsShort: (n) => `words ${n}`,
   rangeDays: (n) => `${n}d`,
+  rangeYear: "Year",
+  rangeCumulative: "Total",
+  cumulativeTip: (month, totalC, totalL, addC, addL) =>
+    `${month}　total ${totalC} CJK / ${totalL} words (this month +${addC} / +${addL})`,
+  cumulativeNote: "Cumulative additions since the ledger started; excludes pre-existing notes.",
   heatTitle: (year) => `Yearly heatmap ${year}`,
   heatWeekdays: ["Mon", "Wed", "Fri"],
   monthShort: (m) =>

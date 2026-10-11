@@ -1,7 +1,7 @@
 {
   "id": "abacus",
   "name": "Abacus",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "minAppVersion": "1.4.0",
   "description": "Track your writing as a ledger: CJK characters and English words counted separately, per file, per day, per project. Fully local.",
   "author": "imluyg",

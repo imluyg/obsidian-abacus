@@ -23,6 +23,7 @@ import { Scanner } from "../src/scanner";
 import {
   buildYearHeatmap,
   byDay,
+  cumulativeByMonth,
   heatLevel,
   isoWeek,
   isExcludedPath,
@@ -30,6 +31,7 @@ import {
   projectOf,
   startOfDay,
   streakFrom,
+  sumByMonth,
   sumWriting,
 } from "../src/stats";
 
@@ -549,6 +551,31 @@ async function testStatsHelpers(): Promise<void> {
   const s = { ...DEFAULT_SETTINGS, reportFolder: "归档/统计归档" };
   check("报告目录被排除", isExcludedPath("归档/统计归档/周报 2026-W46.md", s), true);
   check("普通笔记不排除", isExcludedPath("归档/日记/2026-11-15.md", s), false);
+
+  const monthEntries: LedgerEntry[] = [
+    { t: at("2026-01-15"), p: "a.md", add: [100, 0], del: [0, 0], src: "edit" },
+    { t: at("2026-11-14"), p: "a.md", add: [50, 5], del: [0, 0], src: "edit" },
+  ];
+  const months = sumByMonth(monthEntries, 2026, at("2026-11-15"));
+  check("按月共 12 项", months.length, 12);
+  check("1 月汇总", months[0], { cjk: 100, lat: 0 });
+  check("11 月汇总", months[10], { cjk: 50, lat: 5 });
+  check("未来月份为 0", months[11], { cjk: 0, lat: 0 });
+
+  const cumEntries: LedgerEntry[] = [
+    { t: at("2026-01-15"), p: "a.md", add: [100, 0], del: [0, 0], src: "edit" },
+    { t: at("2026-03-02"), p: "a.md", add: [50, 5], del: [0, 0], src: "edit" },
+    { t: at("2026-03-20"), p: "a.md", add: [25, 0], del: [0, 0], src: "edit" },
+    { t: at("2026-04-01"), p: "a.md", add: [999, 0], del: [0, 0], src: "edit" },
+    { t: at("2026-03-21"), p: "a.md", add: [0, 0], del: [10, 0], src: "delete" },
+  ];
+  const cum = cumulativeByMonth(cumEntries, at("2026-03-31"));
+  check("累计起始月", cum[0]?.month, "2026-01");
+  check("累计月数", cum.length, 3);
+  check("2 月无新增", cum[1]?.add, { cjk: 0, lat: 0 });
+  check("2 月累计延续", cum[1]?.total, { cjk: 100, lat: 0 });
+  check("3 月新增", cum[2]?.add, { cjk: 75, lat: 5 });
+  check("3 月累计", cum[2]?.total, { cjk: 175, lat: 5 });
 }
 
 async function main(): Promise<void> {

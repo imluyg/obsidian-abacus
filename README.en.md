@@ -28,7 +28,7 @@ Every statistic — day, week, month, project, streak — is a view over the led
 ## Features
 
 - **Separate components**: CJK characters and English/number words are counted independently — never merged into one "total"
-- **Daily accounting**: today, this week, this month, whole vault; 7 / 30 day bar chart
+- **Daily accounting**: today, this week, this month, whole vault; 7 / 30 / 90-day, yearly and cumulative bar charts (yearly is monthly; cumulative starts at the ledger's first event)
 - **Streaks**: today not yet written doesn't break the streak; yesterday without writing does
 - **Goals**: optional daily/weekly target with a progress bar
 - **Projects**: grouped by path, click to drill into files; rules can narrow down to a single book

@@ -78,6 +78,11 @@
   height: 64px;
 }
 
+/* 90 天：柱子多，缩到 1px 缝，否则间隙会把宽度吃光 */
+.scs-chart.is-dense {
+  gap: 1px;
+}
+
 .scs-bar-col {
   flex: 1 1 0;
   display: flex;
@@ -119,6 +124,12 @@
 .scs-bar-col.is-today .scs-bar-label {
   color: var(--text-normal);
   font-weight: 600;
+}
+
+.scs-chart-note {
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 0.72em;
 }
 
 .scs-grid {

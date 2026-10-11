@@ -21,6 +21,7 @@ import {
   addDays,
   buildYearHeatmap,
   byDay,
+  cumulativeByMonth,
   daysWithWriting,
   fmtDate,
   isExcludedPath,
@@ -33,6 +34,7 @@ import {
   startOfMonth,
   startOfWeek,
   streakFrom,
+  sumByMonth,
   sumDeletions,
   sumWriting,
   weekdayCN,
@@ -331,12 +333,18 @@ export default class AbacusPlugin extends Plugin {
 
   private async buildPanelData(): Promise<PanelData> {
     const now = Date.now();
-    const range = this.settings.panelRange === 30 ? 30 : 7;
-    const chartFrom = addDays(startOfDay(now), -(range - 1));
+    const range = [7, 30, 90, 365, 0].includes(this.settings.panelRange)
+      ? this.settings.panelRange
+      : 7;
     const year = new Date(now).getFullYear();
     const yearStart = new Date(year, 0, 1).getTime();
+    const chartFrom =
+      range === 365 || range === 0 ? yearStart : addDays(startOfDay(now), -(range - 1));
     const from = Math.min(startOfMonth(now), startOfWeek(now), chartFrom, yearStart);
-    const entries = await this.readMonths(monthsBetween(from, now + 1));
+    const entries =
+      range === 0
+        ? await this.readMonths(await this.store.listLedgerMonths())
+        : await this.readMonths(monthsBetween(from, now + 1));
 
     const todaySum = sumWriting(entries, startOfDay(now), now + 1);
     const fileDel = sumDeletions(entries, startOfDay(now), now + 1).del;
@@ -345,15 +353,51 @@ export default class AbacusPlugin extends Plugin {
     const perDay = byDay(entries);
     const heat = buildYearHeatmap(year, perDay, now);
     const days: DayBar[] = [];
-    for (let i = 0; i < range; i++) {
-      const ts = addDays(chartFrom, i);
-      const key = dayKey(ts);
-      days.push({
-        day: key,
-        label: range > 7 ? `${new Date(ts).getDate()}` : WEEK_CHARS[new Date(ts).getDay()],
-        vec: perDay.get(key) ?? vec(0, 0),
-        isToday: key === dayKey(now),
-      });
+    if (range === 0) {
+      const cum = cumulativeByMonth(entries, now);
+      for (const c of cum) {
+        days.push({
+          day: c.month,
+          label: L().monthShort(Number(c.month.slice(5))),
+          vec: c.total,
+          isToday: c.month === monthKey(now),
+          tip: L().cumulativeTip(
+            c.month,
+            c.total.cjk.toLocaleString("en-US"),
+            c.total.lat.toLocaleString("en-US"),
+            c.add.cjk.toLocaleString("en-US"),
+            c.add.lat.toLocaleString("en-US")
+          ),
+        });
+      }
+    } else if (range === 365) {
+      // 365 根日柱在侧栏里会细到不可读，全年用自然月聚合
+      const currentMonth = new Date(now).getMonth();
+      const monthSums = sumByMonth(entries, year, now);
+      for (let m = 0; m < 12; m++) {
+        days.push({
+          day: `${year}-${String(m + 1).padStart(2, "0")}`,
+          label: L().monthShort(m + 1),
+          vec: monthSums[m],
+          isToday: m === currentMonth,
+        });
+      }
+    } else {
+      for (let i = 0; i < range; i++) {
+        const ts = addDays(chartFrom, i);
+        const key = dayKey(ts);
+        days.push({
+          day: key,
+          label:
+            range > 30
+              ? fmtDate(ts)
+              : range > 7
+                ? `${new Date(ts).getDate()}`
+                : WEEK_CHARS[new Date(ts).getDay()],
+          vec: perDay.get(key) ?? vec(0, 0),
+          isToday: key === dayKey(now),
+        });
+      }
     }
 
     const active = this.app.workspace.getActiveFile();

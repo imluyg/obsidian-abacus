@@ -61,7 +61,7 @@ export interface StatsSettings extends CounterSettings {
   dailyGoal: number;
   /** 每周目标（汉字），0 表示不设目标 */
   weeklyGoal: number;
-  /** 面板柱状图天数：7 或 30 */
+  /** 面板柱状图范围：7 / 30 / 90 天、365（自然月）或 0（账本累计） */
   panelRange: number;
   /** 编辑去抖（毫秒） */
   debounceMs: number;

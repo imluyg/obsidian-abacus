@@ -357,6 +357,10 @@ const zh = {
     foot: (files, time) => `${files} 个文件　更新于 ${time}`,
     wordsShort: (n) => `词 ${n}`,
     rangeDays: (n) => `${n}天`,
+    rangeYear: "全年",
+    rangeCumulative: "累计",
+    cumulativeTip: (month, totalC, totalL, addC, addL) => `${month}　累计 汉字 ${totalC} / 英文词 ${totalL}（本月 +${addC} / +${addL}）`,
+    cumulativeNote: "自账本启用起累计新增，不含启用前的存量。",
     heatTitle: (year) => `全年热力图 ${year}`,
     heatWeekdays: ["一", "三", "五"],
     monthShort: (m) => `${m}月`,
@@ -500,6 +504,10 @@ const en = {
     foot: (files, time) => `${files} files　updated ${time}`,
     wordsShort: (n) => `words ${n}`,
     rangeDays: (n) => `${n}d`,
+    rangeYear: "Year",
+    rangeCumulative: "Total",
+    cumulativeTip: (month, totalC, totalL, addC, addL) => `${month}　total ${totalC} CJK / ${totalL} words (this month +${addC} / +${addL})`,
+    cumulativeNote: "Cumulative additions since the ledger started; excludes pre-existing notes.",
     heatTitle: (year) => `Yearly heatmap ${year}`,
     heatWeekdays: ["Mon", "Wed", "Fri"],
     monthShort: (m) => {
@@ -900,27 +908,61 @@ class AbacusPlugin extends obsidian_1.Plugin {
     async buildPanelData() {
         var _a, _b, _c, _d, _e, _f, _g, _h;
         const now = Date.now();
-        const range = this.settings.panelRange === 30 ? 30 : 7;
-        const chartFrom = (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(range - 1));
+        const range = [7, 30, 90, 365, 0].includes(this.settings.panelRange)
+            ? this.settings.panelRange
+            : 7;
         const year = new Date(now).getFullYear();
         const yearStart = new Date(year, 0, 1).getTime();
+        const chartFrom = range === 365 || range === 0 ? yearStart : (0, stats_1.addDays)((0, stats_1.startOfDay)(now), -(range - 1));
         const from = Math.min((0, stats_1.startOfMonth)(now), (0, stats_1.startOfWeek)(now), chartFrom, yearStart);
-        const entries = await this.readMonths((0, stats_1.monthsBetween)(from, now + 1));
+        const entries = range === 0
+            ? await this.readMonths(await this.store.listLedgerMonths())
+            : await this.readMonths((0, stats_1.monthsBetween)(from, now + 1));
         const todaySum = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1);
         const fileDel = (0, stats_1.sumDeletions)(entries, (0, stats_1.startOfDay)(now), now + 1).del;
         const todayDel = (0, types_1.vec)(todaySum.del.cjk + fileDel.cjk, todaySum.del.lat + fileDel.lat);
         const perDay = (0, stats_1.byDay)(entries);
         const heat = (0, stats_1.buildYearHeatmap)(year, perDay, now);
         const days = [];
-        for (let i = 0; i < range; i++) {
-            const ts = (0, stats_1.addDays)(chartFrom, i);
-            const key = (0, store_1.dayKey)(ts);
-            days.push({
-                day: key,
-                label: range > 7 ? `${new Date(ts).getDate()}` : WEEK_CHARS[new Date(ts).getDay()],
-                vec: (_a = perDay.get(key)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0),
-                isToday: key === (0, store_1.dayKey)(now),
-            });
+        if (range === 0) {
+            const cum = (0, stats_1.cumulativeByMonth)(entries, now);
+            for (const c of cum) {
+                days.push({
+                    day: c.month,
+                    label: (0, i18n_1.L)().monthShort(Number(c.month.slice(5))),
+                    vec: c.total,
+                    isToday: c.month === (0, store_1.monthKey)(now),
+                    tip: (0, i18n_1.L)().cumulativeTip(c.month, c.total.cjk.toLocaleString("en-US"), c.total.lat.toLocaleString("en-US"), c.add.cjk.toLocaleString("en-US"), c.add.lat.toLocaleString("en-US")),
+                });
+            }
+        }
+        else if (range === 365) {
+            const currentMonth = new Date(now).getMonth();
+            const monthSums = (0, stats_1.sumByMonth)(entries, year, now);
+            for (let m = 0; m < 12; m++) {
+                days.push({
+                    day: `${year}-${String(m + 1).padStart(2, "0")}`,
+                    label: (0, i18n_1.L)().monthShort(m + 1),
+                    vec: monthSums[m],
+                    isToday: m === currentMonth,
+                });
+            }
+        }
+        else {
+            for (let i = 0; i < range; i++) {
+                const ts = (0, stats_1.addDays)(chartFrom, i);
+                const key = (0, store_1.dayKey)(ts);
+                days.push({
+                    day: key,
+                    label: range > 30
+                        ? (0, stats_1.fmtDate)(ts)
+                        : range > 7
+                            ? `${new Date(ts).getDate()}`
+                            : WEEK_CHARS[new Date(ts).getDay()],
+                    vec: (_a = perDay.get(key)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0),
+                    isToday: key === (0, store_1.dayKey)(now),
+                });
+            }
         }
         const active = this.app.workspace.getActiveFile();
         const rec = active ? this.store.get(active.path) : undefined;
@@ -2141,6 +2183,8 @@ exports.emptySum = emptySum;
 exports.addToSum = addToSum;
 exports.sumWriting = sumWriting;
 exports.sumDeletions = sumDeletions;
+exports.sumByMonth = sumByMonth;
+exports.cumulativeByMonth = cumulativeByMonth;
 exports.byDay = byDay;
 exports.daysWithWriting = daysWithWriting;
 exports.heatLevel = heatLevel;
@@ -2192,6 +2236,49 @@ function sumDeletions(entries, from, to) {
         s = addToSum(s, e);
     }
     return s;
+}
+function sumByMonth(entries, year, now = Date.now()) {
+    const out = [];
+    for (let m = 0; m < 12; m++) {
+        const from = new Date(year, m, 1).getTime();
+        const to = new Date(year, m + 1, 1).getTime();
+        out.push(sumWriting(entries, from, Math.min(to, now + 1)).add);
+    }
+    return out;
+}
+function cumulativeByMonth(entries, now = Date.now()) {
+    var _a, _b;
+    const byMonth = new Map();
+    let first = Infinity;
+    for (const e of entries) {
+        if (e.t > now)
+            continue;
+        if (!WRITE_SRC.has(e.src))
+            continue;
+        const key = (0, store_1.monthKey)(e.t);
+        byMonth.set(key, (0, types_1.addVec)((_a = byMonth.get(key)) !== null && _a !== void 0 ? _a : types_1.ZERO, (0, types_1.vec)(e.add[0], e.add[1])));
+        if (e.t < first)
+            first = e.t;
+    }
+    if (!Number.isFinite(first))
+        return [];
+    const start = new Date(first);
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now);
+    end.setDate(1);
+    end.setHours(0, 0, 0, 0);
+    const out = [];
+    let total = (0, types_1.vec)(0, 0);
+    const cursor = new Date(start);
+    while (cursor.getTime() <= end.getTime()) {
+        const key = (0, store_1.monthKey)(cursor.getTime());
+        const add = (_b = byMonth.get(key)) !== null && _b !== void 0 ? _b : types_1.ZERO;
+        total = (0, types_1.addVec)(total, add);
+        out.push({ month: key, add, total });
+        cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return out;
 }
 function byDay(entries) {
     var _a;
@@ -2848,7 +2935,7 @@ const obsidian_1 = require("obsidian");
 const i18n_1 = require("./i18n");
 const stats_1 = require("./stats");
 exports.VIEW_TYPE_STATS = "abacus-view";
-const RANGES = [7, 30];
+const RANGES = [7, 30, 90, 365, 0];
 const fmt = (n) => Math.round(n).toLocaleString("en-US");
 class StatsView extends obsidian_1.ItemView {
     constructor(leaf, hooks) {
@@ -2887,7 +2974,7 @@ class StatsView extends obsidian_1.ItemView {
         for (const r of RANGES) {
             const b = buttons.createEl("button", {
                 cls: "scs-range-btn" + (((_a = this.data) === null || _a === void 0 ? void 0 : _a.range) === r ? " is-active" : ""),
-                text: t.rangeDays(r),
+                text: r === 0 ? t.rangeCumulative : r === 365 ? t.rangeYear : t.rangeDays(r),
             });
             b.onclick = () => this.hooks.onRange(r);
         }
@@ -2935,10 +3022,13 @@ class StatsView extends obsidian_1.ItemView {
             });
         }
         const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
-        const chart = chartWrap.createDiv({ cls: "scs-chart" });
+        const chart = chartWrap.createDiv({
+            cls: "scs-chart" + (d.range === 90 || d.days.length > 24 ? " is-dense" : ""),
+        });
         const max = Math.max(1, ...d.days.map((x) => x.vec.cjk + x.vec.lat));
-        const labelEvery = d.days.length > 10 ? Math.ceil(d.days.length / 6) : 1;
+        const labelEvery = d.range === 365 ? 1 : d.days.length > 10 ? Math.ceil(d.days.length / 6) : 1;
         d.days.forEach((bar, i) => {
+            var _a;
             const value = bar.vec.cjk + bar.vec.lat;
             const col = chart.createDiv({ cls: "scs-bar-col" });
             if (bar.isToday)
@@ -2949,8 +3039,11 @@ class StatsView extends obsidian_1.ItemView {
             const showLabel = d.days.length <= 7 || bar.isToday || (d.days.length - 1 - i) % labelEvery === 0;
             if (showLabel)
                 col.createDiv({ cls: "scs-bar-label", text: bar.label });
-            col.title = t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
+            col.title = (_a = bar.tip) !== null && _a !== void 0 ? _a : t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
         });
+        if (d.range === 0) {
+            chartWrap.createDiv({ cls: "scs-chart-note", text: t.cumulativeNote });
+        }
         this.renderHeatmap(root, d.heat);
         const grid = root.createDiv({ cls: "scs-grid" });
         this.metric(grid, t.week, d.weekAdd);

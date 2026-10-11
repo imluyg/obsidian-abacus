@@ -45,6 +45,65 @@ export function sumDeletions(entries: LedgerEntry[], from: number, to: number): 
   return s;
 }
 
+/** 某年 12 个自然月的写作量，未来月份为 0；用于“全年”柱状图 */
+export function sumByMonth(entries: LedgerEntry[], year: number, now = Date.now()): Vec[] {
+  const out: Vec[] = [];
+  for (let m = 0; m < 12; m++) {
+    const from = new Date(year, m, 1).getTime();
+    const to = new Date(year, m + 1, 1).getTime();
+    out.push(sumWriting(entries, from, Math.min(to, now + 1)).add);
+  }
+  return out;
+}
+
+export interface CumulativeMonth {
+  /** YYYY-MM */
+  month: string;
+  /** 当月新增 */
+  add: Vec;
+  /** 截至当月的账本累计新增 */
+  total: Vec;
+}
+
+/**
+ * 自账本第一条写作事件所在月起，逐月累计“新增”。
+ *
+ * 没有事件的月份也保留，累计值延续；未来时间戳（时钟不准）不计入。
+ * 这是“自启用账本起写的新增”，不是全库存量——启用插件前的笔记不在账本里。
+ */
+export function cumulativeByMonth(entries: LedgerEntry[], now = Date.now()): CumulativeMonth[] {
+  const byMonth = new Map<string, Vec>();
+  let first = Infinity;
+
+  for (const e of entries) {
+    if (e.t > now) continue;
+    if (!WRITE_SRC.has(e.src)) continue;
+    const key = monthKey(e.t);
+    byMonth.set(key, addVec(byMonth.get(key) ?? ZERO, vec(e.add[0], e.add[1])));
+    if (e.t < first) first = e.t;
+  }
+  if (!Number.isFinite(first)) return [];
+
+  const start = new Date(first);
+  start.setDate(1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(now);
+  end.setDate(1);
+  end.setHours(0, 0, 0, 0);
+
+  const out: CumulativeMonth[] = [];
+  let total = vec(0, 0);
+  const cursor = new Date(start);
+  while (cursor.getTime() <= end.getTime()) {
+    const key = monthKey(cursor.getTime());
+    const add = byMonth.get(key) ?? ZERO;
+    total = addVec(total, add);
+    out.push({ month: key, add, total });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return out;
+}
+
 /** 按天汇总写作量，用于柱状图 */
 export function byDay(entries: LedgerEntry[]): Map<string, Vec> {
   const out = new Map<string, Vec>();

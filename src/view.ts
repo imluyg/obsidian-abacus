@@ -10,6 +10,8 @@ export interface DayBar {
   label: string;
   vec: Vec;
   isToday: boolean;
+  /** 累计视图的自定义提示；普通柱状图用 chartTip */
+  tip?: string;
 }
 
 export interface ProjectRow {
@@ -62,7 +64,7 @@ export interface ViewHooks {
   onProject: (name: string) => void;
 }
 
-const RANGES = [7, 30];
+const RANGES = [7, 30, 90, 365, 0];
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
 export class StatsView extends ItemView {
@@ -110,7 +112,7 @@ export class StatsView extends ItemView {
     for (const r of RANGES) {
       const b = buttons.createEl("button", {
         cls: "scs-range-btn" + (this.data?.range === r ? " is-active" : ""),
-        text: t.rangeDays(r),
+        text: r === 0 ? t.rangeCumulative : r === 365 ? t.rangeYear : t.rangeDays(r),
       });
       b.onclick = () => this.hooks.onRange(r);
     }
@@ -167,9 +169,12 @@ export class StatsView extends ItemView {
 
     // 趋势图
     const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
-    const chart = chartWrap.createDiv({ cls: "scs-chart" });
+    const chart = chartWrap.createDiv({
+      cls: "scs-chart" + (d.range === 90 || d.days.length > 24 ? " is-dense" : ""),
+    });
     const max = Math.max(1, ...d.days.map((x) => x.vec.cjk + x.vec.lat));
-    const labelEvery = d.days.length > 10 ? Math.ceil(d.days.length / 6) : 1;
+    const labelEvery =
+      d.range === 365 ? 1 : d.days.length > 10 ? Math.ceil(d.days.length / 6) : 1;
     d.days.forEach((bar, i) => {
       const value = bar.vec.cjk + bar.vec.lat;
       const col = chart.createDiv({ cls: "scs-bar-col" });
@@ -180,8 +185,11 @@ export class StatsView extends ItemView {
       const showLabel =
         d.days.length <= 7 || bar.isToday || (d.days.length - 1 - i) % labelEvery === 0;
       if (showLabel) col.createDiv({ cls: "scs-bar-label", text: bar.label });
-      col.title = t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
+      col.title = bar.tip ?? t.chartTip(bar.day, fmt(bar.vec.cjk), fmt(bar.vec.lat));
     });
+    if (d.range === 0) {
+      chartWrap.createDiv({ cls: "scs-chart-note", text: t.cumulativeNote });
+    }
 
     this.renderHeatmap(root, d.heat);
 

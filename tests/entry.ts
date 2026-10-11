@@ -13,6 +13,7 @@ import { DEFAULT_SETTINGS, entryKey, primaryOf } from "../src/types";
 import { countMarkdown, diffCounts } from "../src/counter";
 import {
   StatsStore,
+  MonthEntryCache,
   dedupeEntries,
   parseLedger,
   parseLedgerReport,
@@ -119,6 +120,14 @@ function fsVaultIO(root: string, dataRoot: string): VaultIO {
   };
   return {
     listFiles: () => walk(root),
+    statFile: (rel: string) => {
+      try {
+        const st = fs.statSync(path.join(root, rel));
+        return { path: rel, size: st.size, mtime: st.mtimeMs };
+      } catch {
+        return null;
+      }
+    },
     readFile: async (rel: string) => fs.promises.readFile(path.join(root, rel), "utf8"),
     adapter: new FsAdapter(dataRoot),
   };
@@ -170,8 +179,14 @@ async function testLedgerFlow(): Promise<void> {
 
   // 编辑：追加 5 个汉字
   await fs.promises.writeFile(path.join(root, "笔记", "a.md"), "刚开始写第一句话。又写了五个字", "utf8");
+  // 热路径不得遍历全库；这里故意让 listFiles 抛错来证明 processEdit 不再依赖它
+  const origListFiles = io.listFiles;
+  io.listFiles = () => {
+    throw new Error("processEdit should not list the whole vault");
+  };
   scanner.scheduleEdit("笔记/a.md");
   await sleep(260);
+  io.listFiles = origListFiles;
   const afterEdit = await store.readMonth(monthNow());
   check("编辑产生 1 条账本", afterEdit.length, 1);
   check("编辑记录新增汉字", afterEdit[0]?.add[0], 6);
@@ -184,11 +199,12 @@ async function testLedgerFlow(): Promise<void> {
   check("重命名后账本条数不变", (await store.readMonth(monthNow())).length, 1);
   check("重命名后快照路径", store.get("笔记/c.md") !== undefined, true);
 
-  // 删除
+  // 删除：账本立即写，快照合并后由 flush 落盘
   await scanner.handleDelete("笔记/b.md");
   const afterDelete = await store.readMonth(monthNow());
   check("删除产生记录", afterDelete.some((e) => e.src === "delete"), true);
   check("删除不计入写作", sumWriting(afterDelete, startOfDay(), Date.now() + 1).add.cjk, 6);
+  await scanner.flush();
 
   // 重启：快照从盘上读回来
   const store2 = new StatsStore("", new FsAdapter(data));
@@ -578,6 +594,93 @@ async function testStatsHelpers(): Promise<void> {
   check("3 月累计", cum[2]?.total, { cjk: 175, lat: 5 });
 }
 
+async function testCaches(): Promise<void> {
+  console.log("\n[9] 账本缓存与追加通知");
+  const baseT = new Date(2026, 10, 15, 10, 0, 0).getTime();
+  const ev = (t: number, p: string): LedgerEntry => ({ t, p, add: [1, 0], del: [0, 0], src: "edit" });
+
+  let clock = 1_000;
+  let loads = 0;
+  const cache = new MonthEntryCache(
+    async () => {
+      loads++;
+      return [ev(baseT, "a.md")];
+    },
+    1000,
+    () => clock
+  );
+  check("缓存首次读取", (await cache.get("2026-11")).length, 1);
+  check("缓存首次 load 次数", loads, 1);
+  await cache.get("2026-11");
+  check("缓存命中不重读", loads, 1);
+  cache.add([ev(baseT + 1000, "b.md")]);
+  const afterAdd = await cache.get("2026-11");
+  check("追加进缓存不重读", loads, 1);
+  check("追加后条数", afterAdd.length, 2);
+  clock += 1001;
+  await cache.get("2026-11");
+  check("TTL 过期重读", loads, 2);
+  cache.clear();
+  await cache.get("2026-11");
+  check("clear 后重读", loads, 3);
+
+  let concurrentLoads = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const slow = new MonthEntryCache(
+    async () => {
+      concurrentLoads++;
+      await gate;
+      return [];
+    },
+    1000,
+    () => clock
+  );
+  const p1 = slow.get("2026-12");
+  const p2 = slow.get("2026-12");
+  check("并发 get 只读一次", concurrentLoads, 1);
+  release();
+  await Promise.all([p1, p2]);
+
+  let raceLoads = 0;
+  let releaseRace!: () => void;
+  const raceGate = new Promise<void>((r) => {
+    releaseRace = r;
+  });
+  const racing = new MonthEntryCache(
+    async () => {
+      raceLoads++;
+      await raceGate;
+      return [ev(baseT, "a.md")];
+    },
+    1000,
+    () => clock
+  );
+  const loading = racing.get("2026-11");
+  racing.add([ev(baseT + 1, "b.md")]);
+  releaseRace();
+  const merged = await loading;
+  check("加载中追加不丢", merged.length, 2);
+  check("加载中追加命中缓存", (await racing.get("2026-11")).length, 2);
+  check("加载中追加不重复读", raceLoads, 1);
+
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "scs-cache-"));
+  const adapter = new FsAdapter(root);
+  const store = new StatsStore("", adapter);
+  await store.load();
+  const seen: LedgerEntry[] = [];
+  store.onAppend((entries) => seen.push(...entries));
+  const zero: LedgerEntry = { t: baseT, p: "zero.md", add: [0, 0], del: [0, 0], src: "edit" };
+  await store.append([zero, ev(baseT, "good.md")]);
+  check("onAppend 只通知有效事件", seen.length, 1);
+  check("onAppend 条目正确", seen[0]?.p, "good.md");
+  await store.append([]);
+  check("空批次不通知", seen.length, 1);
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 async function main(): Promise<void> {
   await testCounter();
   await testStatsHelpers();
@@ -585,6 +688,7 @@ async function main(): Promise<void> {
   await testLedgerIntegrity();
   await testBackup();
   await testHeatmap();
+  await testCaches();
   const vault = process.argv[2];
   if (vault && fs.existsSync(vault)) await testRealVault(vault);
   await testPerformance();

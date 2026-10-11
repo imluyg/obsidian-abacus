@@ -69,6 +69,7 @@ const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
 export class StatsView extends ItemView {
   private data: PanelData | null = null;
+  private progressEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, private hooks: ViewHooks) {
     super(leaf);
@@ -99,13 +100,28 @@ export class StatsView extends ItemView {
     this.render();
   }
 
+  /** 扫描进度只改这一行，不重建整个面板 */
+  setProgress(progress: { done: number; total: number } | null): void {
+    const el = this.progressEl;
+    if (!el) return;
+    if (progress) {
+      el.style.display = "";
+      el.setText(L().scanning(progress.done, progress.total));
+    } else {
+      el.style.display = "none";
+    }
+  }
+
   private render(): void {
     const t = L();
     const root = this.contentEl;
-    root.empty();
+    const prevScrollTop = root.scrollTop;
+    const prevHeatScroll =
+      root.querySelector<HTMLElement>(".scs-heat-scroll")?.scrollLeft ?? 0;
+    const host = document.createElement("div");
     root.addClass("scs-panel");
 
-    const header = root.createDiv({ cls: "scs-header" });
+    const header = host.createDiv({ cls: "scs-header" });
     header.createDiv({ cls: "scs-title", text: t.today });
     const buttons = header.createDiv({ cls: "scs-header-actions" });
 
@@ -124,25 +140,28 @@ export class StatsView extends ItemView {
     setIcon(refresh, "refresh-cw");
     refresh.onclick = () => this.hooks.onRescan();
 
+    const progressEl = host.createDiv({ cls: "scs-progress" });
+    this.progressEl = progressEl;
+    progressEl.style.display = "none";
+
     if (!this.data) {
-      root.createDiv({ cls: "scs-empty", text: t.reading });
+      host.createDiv({ cls: "scs-empty", text: t.reading });
+      this.commit(root, host, prevScrollTop, prevHeatScroll);
       return;
     }
     const d = this.data;
 
     if (d.scanning && d.progress) {
-      root.createDiv({
-        cls: "scs-progress",
-        text: t.scanning(d.progress.done, d.progress.total),
-      });
+      progressEl.style.display = "";
+      progressEl.setText(t.scanning(d.progress.done, d.progress.total));
     }
 
     // 今日主数字
-    const hero = root.createDiv({ cls: "scs-hero" });
+    const hero = host.createDiv({ cls: "scs-hero" });
     hero.createDiv({ cls: "scs-hero-num", text: fmt(d.todayAdd.cjk) });
     hero.createDiv({ cls: "scs-hero-unit", text: t.cjk });
 
-    const heroSub = root.createDiv({ cls: "scs-hero-sub" });
+    const heroSub = host.createDiv({ cls: "scs-hero-sub" });
     heroSub.createSpan({ text: t.latinWords(fmt(d.todayAdd.lat)) });
     if (d.todayDel.cjk > 0 || d.todayDel.lat > 0) {
       heroSub.createSpan({
@@ -157,7 +176,7 @@ export class StatsView extends ItemView {
     // 今日目标：有目标才出现
     if (d.dailyGoal > 0) {
       const pct = Math.min(100, Math.round((d.todayAdd.cjk / d.dailyGoal) * 100));
-      const goal = root.createDiv({ cls: "scs-goal" });
+      const goal = host.createDiv({ cls: "scs-goal" });
       if (d.todayAdd.cjk >= d.dailyGoal) goal.addClass("is-done");
       const track = goal.createDiv({ cls: "scs-goal-track" });
       track.createDiv({ cls: "scs-goal-fill", attr: { style: `width:${pct}%` } });
@@ -168,7 +187,7 @@ export class StatsView extends ItemView {
     }
 
     // 趋势图
-    const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
+    const chartWrap = host.createDiv({ cls: "scs-chart-wrap" });
     const chart = chartWrap.createDiv({
       cls: "scs-chart" + (d.range === 90 || d.days.length > 24 ? " is-dense" : ""),
     });
@@ -191,17 +210,17 @@ export class StatsView extends ItemView {
       chartWrap.createDiv({ cls: "scs-chart-note", text: t.cumulativeNote });
     }
 
-    this.renderHeatmap(root, d.heat);
+    this.renderHeatmap(host, d.heat);
 
     // 汇总
-    const grid = root.createDiv({ cls: "scs-grid" });
+    const grid = host.createDiv({ cls: "scs-grid" });
     this.metric(grid, t.week, d.weekAdd);
     this.metric(grid, t.month, d.monthAdd);
     this.metric(grid, t.all, d.total);
 
     if (d.weeklyGoal > 0) {
       const pct = Math.min(100, Math.round((d.weekAdd.cjk / d.weeklyGoal) * 100));
-      const line = root.createDiv({
+      const line = host.createDiv({
         cls: "scs-goal-line" + (d.weekAdd.cjk >= d.weeklyGoal ? " is-done" : ""),
         text: t.weekGoalText(fmt(d.weekAdd.cjk), fmt(d.weeklyGoal), pct),
       });
@@ -210,7 +229,7 @@ export class StatsView extends ItemView {
 
     // 项目
     if (d.projects.length > 0) {
-      const proj = root.createDiv({ cls: "scs-projects" });
+      const proj = host.createDiv({ cls: "scs-projects" });
       proj.createDiv({ cls: "scs-section-title", text: t.projects });
       const head = proj.createDiv({ cls: "scs-project-row is-head" });
       head.createDiv({ cls: "scs-project-name", text: "" });
@@ -260,7 +279,7 @@ export class StatsView extends ItemView {
 
     // 当前文件
     if (d.current) {
-      const cur = root.createDiv({ cls: "scs-current" });
+      const cur = host.createDiv({ cls: "scs-current" });
       cur.createDiv({ cls: "scs-current-label", text: t.currentFile });
       cur.createDiv({
         cls: "scs-current-name",
@@ -273,7 +292,7 @@ export class StatsView extends ItemView {
     }
 
     // 账本健康：常驻显示，比启动时弹一次 Notice 可靠
-    const healthEl = root.createDiv({ cls: "scs-health" });
+    const healthEl = host.createDiv({ cls: "scs-health" });
     if (!d.health) {
       healthEl.setText(t.healthChecking);
     } else if (d.health.ok) {
@@ -289,7 +308,16 @@ export class StatsView extends ItemView {
       hour: "2-digit",
       minute: "2-digit",
     });
-    root.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
+    host.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
+    this.commit(root, host, prevScrollTop, prevHeatScroll);
+  }
+
+  /** 一次性替换内容并恢复滚动位置，避免重建过程中 reflow 与滚动跳动 */
+  private commit(root: HTMLElement, host: HTMLElement, prevTop: number, prevHeat: number): void {
+    root.replaceChildren(host);
+    root.scrollTop = prevTop;
+    const heatScroll = root.querySelector<HTMLElement>(".scs-heat-scroll");
+    if (heatScroll) heatScroll.scrollLeft = prevHeat;
   }
 
   /**
@@ -344,8 +372,10 @@ export class StatsView extends ItemView {
               cls: "scs-heat-fill",
               attr: { style: `opacity:${opacities[lv]}` },
             });
+            cell.title = t.chartTip(day.day, fmt(day.vec.cjk), fmt(day.vec.lat));
+          } else {
+            cell.title = day.day;
           }
-          cell.title = t.chartTip(day.day, fmt(day.vec.cjk), fmt(day.vec.lat));
         }
         if (day.isToday) cell.addClass("is-today");
       }

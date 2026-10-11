@@ -47,11 +47,14 @@ export function sumDeletions(entries: LedgerEntry[], from: number, to: number): 
 
 /** 某年 12 个自然月的写作量，未来月份为 0；用于“全年”柱状图 */
 export function sumByMonth(entries: LedgerEntry[], year: number, now = Date.now()): Vec[] {
-  const out: Vec[] = [];
-  for (let m = 0; m < 12; m++) {
-    const from = new Date(year, m, 1).getTime();
-    const to = new Date(year, m + 1, 1).getTime();
-    out.push(sumWriting(entries, from, Math.min(to, now + 1)).add);
+  const out: Vec[] = Array.from({ length: 12 }, () => vec(0, 0));
+  const limit = now + 1;
+  for (const e of entries) {
+    if (e.t >= limit) continue;
+    if (!WRITE_SRC.has(e.src)) continue;
+    const d = new Date(e.t);
+    if (d.getFullYear() !== year) continue;
+    out[d.getMonth()] = addVec(out[d.getMonth()], vec(e.add[0], e.add[1]));
   }
   return out;
 }

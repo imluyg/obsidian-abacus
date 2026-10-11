@@ -49,18 +49,38 @@ export class StatsStore {
   private saveTimer: number | null = null;
   /** 账本文件上次写完后的大小，用来判断能否直接追加 */
   private lastSize = new Map<string, number>();
+  private ensuredDirs = new Set<string>();
+  private appendListeners: ((entries: LedgerEntry[]) => void)[] = [];
 
   get isLoaded(): boolean {
     return this.loaded;
   }
 
+  /** 本机成功追加事件后的通知；用于让上层缓存原地追加，而不是整体失效 */
+  onAppend(cb: (entries: LedgerEntry[]) => void): void {
+    this.appendListeners.push(cb);
+  }
+
+  private notifyAppend(entries: LedgerEntry[]): void {
+    for (const cb of this.appendListeners) cb(entries);
+  }
+
   /** 重建快照时清空内存态；磁盘上的旧快照会被下一次 save 覆盖 */
   clear(): void {
     this.records.clear();
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
   }
 
   entries(): [string, Record2][] {
     return [...this.records.entries()];
+  }
+
+  /** 遍历而不复制整个 Map，供刷新等只读路径使用 */
+  forEach(cb: (path: string, rec: Record2) => void): void {
+    for (const [path, rec] of this.records) cb(path, rec);
   }
 
   get(path: string): Record2 | undefined {
@@ -91,10 +111,10 @@ export class StatsStore {
   total(): Vec {
     let cjk = 0;
     let lat = 0;
-    for (const [, r] of this.records) {
+    this.forEach((_path, r) => {
       cjk += r.vec.cjk;
       lat += r.vec.lat;
-    }
+    });
     return vec(cjk, lat);
   }
 
@@ -153,35 +173,49 @@ export class StatsStore {
   /** 追加一批事件；同一批次内按月份归并，各只写一次 */
   async append(entries: LedgerEntry[]): Promise<void> {
     if (entries.length === 0) return;
-    const byMonth = new Map<string, string[]>();
+    const byMonth = new Map<string, { entries: LedgerEntry[]; lines: string[] }>();
     for (const e of entries) {
       if (isZeroVec(vec(e.add[0], e.add[1])) && isZeroVec(vec(e.del[0], e.del[1]))) continue;
       const ym = monthKey(e.t);
       const line = JSON.stringify(e);
-      const arr = byMonth.get(ym);
-      if (arr) arr.push(line);
-      else byMonth.set(ym, [line]);
+      const group = byMonth.get(ym);
+      if (group) {
+        group.entries.push(e);
+        group.lines.push(line);
+      } else {
+        byMonth.set(ym, { entries: [e], lines: [line] });
+      }
     }
     if (byMonth.size === 0) return;
     await this.ensureDir("stats");
     await this.ensureDir(LEDGER_REL);
-    for (const [ym, lines] of byMonth) {
-      const full = this.path(this.ledgerPath(ym));
-      const payload = lines.join("\n") + "\n";
 
-      if (await this.tryFastAppend(full, payload)) continue;
+    const written: LedgerEntry[] = [];
+    try {
+      for (const [ym, group] of byMonth) {
+        const full = this.path(this.ledgerPath(ym));
+        const payload = group.lines.join("\n") + "\n";
 
-      // 安全路径：读全文、修尾、整写
-      let prev = "";
-      try {
-        prev = await this.adapter.read(full);
-      } catch {
-        prev = "";
+        if (await this.tryFastAppend(full, payload)) {
+          written.push(...group.entries);
+          continue;
+        }
+
+        // 安全路径：读全文、修尾、整写
+        let prev = "";
+        try {
+          prev = await this.adapter.read(full);
+        } catch {
+          prev = "";
+        }
+        const { text, dropped } = repairTail(prev);
+        if (dropped > 0) this.repairs.push({ ym, dropped });
+        await this.adapter.write(full, text + payload);
+        written.push(...group.entries);
+        await this.rememberSize(full);
       }
-      const { text, dropped } = repairTail(prev);
-      if (dropped > 0) this.repairs.push({ ym, dropped });
-      await this.adapter.write(full, text + payload);
-      await this.rememberSize(full);
+    } finally {
+      if (written.length > 0) this.notifyAppend(written);
     }
   }
 
@@ -203,8 +237,12 @@ export class StatsStore {
 
   private async rememberSize(full: string): Promise<void> {
     if (!this.adapter.stat) return;
-    const st = await this.adapter.stat(full);
-    if (st) this.lastSize.set(full, st.size);
+    try {
+      const st = await this.adapter.stat(full);
+      if (st) this.lastSize.set(full, st.size);
+    } catch {
+      // stat 只是快路径的提示；失败就退回安全路径
+    }
   }
 
   /** 读某个月的全部事件：可能有多台设备写的多个文件 */
@@ -373,12 +411,99 @@ export class StatsStore {
 
   private async ensureDir(rel: string): Promise<void> {
     const p = this.path(rel);
+    if (this.ensuredDirs.has(p)) return;
     try {
       if (!(await this.adapter.exists(p))) await this.adapter.mkdir(p);
+      this.ensuredDirs.add(p);
     } catch {
       // 已存在或无权限：交给后续 write 报错
     }
   }
+}
+
+/**
+ * 按月缓存解析后的账本事件。
+ *
+ * 账本只追加：本机新事件由 StatsStore.onAppend 直接并进缓存，
+ * 不必为了看到自己刚写的字把整年账本重读一遍。TTL 只用于兜底
+ * 外部同步/手改账本的情况；导入与恢复会显式 clear。
+ */
+export class MonthEntryCache {
+  private months = new Map<string, { at: number; entries: LedgerEntry[] }>();
+  private pending = new Map<string, Promise<LedgerEntry[]>>();
+  private pendingAdds = new Map<string, LedgerEntry[]>();
+  private generation = 0;
+
+  constructor(
+    private load: (ym: string) => Promise<LedgerEntry[]>,
+    private ttlMs: number,
+    private clock: () => number = () => Date.now()
+  ) {}
+
+  async get(ym: string): Promise<LedgerEntry[]> {
+    const hit = this.months.get(ym);
+    if (hit && this.clock() - hit.at < this.ttlMs) return hit.entries;
+    const inFlight = this.pending.get(ym);
+    if (inFlight) return inFlight;
+
+    const gen = this.generation;
+    const extra: LedgerEntry[] = [];
+    this.pendingAdds.set(ym, extra);
+    const promise = this.load(ym).then(
+      (entries) => {
+        if (gen === this.generation) {
+          const merged = extra.length > 0 ? mergeEntries(entries, extra) : entries;
+          this.months.set(ym, { at: this.clock(), entries: merged });
+          this.pendingAdds.delete(ym);
+          this.pending.delete(ym);
+          return merged;
+        }
+        return entries;
+      },
+      (err) => {
+        if (gen === this.generation) {
+          this.pendingAdds.delete(ym);
+          this.pending.delete(ym);
+        }
+        throw err;
+      }
+    );
+    this.pending.set(ym, promise);
+    return promise;
+  }
+
+  /** 本机新写入的事件并入缓存；正在加载的月份在加载完成后合并，避免被旧读数覆盖 */
+  add(entries: LedgerEntry[]): void {
+    for (const e of entries) {
+      const ym = monthKey(e.t);
+      const loading = this.pendingAdds.get(ym);
+      if (loading) {
+        loading.push(e);
+        continue;
+      }
+      const hit = this.months.get(ym);
+      if (hit) hit.entries.push(e);
+    }
+  }
+
+  clear(): void {
+    this.generation++;
+    this.months.clear();
+    this.pending.clear();
+    this.pendingAdds.clear();
+  }
+}
+
+function mergeEntries(base: LedgerEntry[], extra: LedgerEntry[]): LedgerEntry[] {
+  const seen = new Set(base.map(entryKey));
+  const out = base.slice();
+  for (const e of extra) {
+    const key = entryKey(e);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
 }
 
 export interface LedgerAudit {

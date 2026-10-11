@@ -20,6 +20,8 @@ import { isExcludedPath } from "./stats";
  */
 
 const TEXT_CACHE_LIMIT = 32;
+/** 全量扫描时并发读文件；计数仍在主线程，这里只重叠 I/O */
+const READ_CONCURRENCY = 4;
 
 export interface ScanCallbacks {
   onProgress?: (done: number, total: number) => void;
@@ -59,6 +61,7 @@ export class Scanner {
 
     const files = this.io.listFiles().filter((f) => !this.isExcluded(f.path));
     const seen = new Set<string>();
+    const pending: FileStatInfo[] = [];
     const entries: LedgerEntry[] = [];
     let changed = 0;
     let done = 0;
@@ -67,40 +70,55 @@ export class Scanner {
       for (const f of files) {
         seen.add(f.path);
         const rec = this.store.get(f.path);
-        done++;
-        if (rec && rec.size === f.size && rec.mtime === f.mtime) {
-          if (done % 200 === 0) this.cb.onProgress?.(done, files.length);
-          continue;
-        }
-
-        const text = await this.io.readFile(f.path);
-        const v = countMarkdown(text, opts);
-        changed++;
-
-        if (rec) {
-          const { add, del } = this.splitDelta(rec.vec, v);
-          if (!isZeroVec(add) || !isZeroVec(del)) {
-            entries.push({ t: Date.now(), p: f.path, add: toTuple(add), del: toTuple(del), src: "scan" });
-          }
-        } else if (!firstRun) {
-          // 快照里没有 = 关机期间新建的文件，算真实新增
-          entries.push({
-            t: Date.now(),
-            p: f.path,
-            add: toTuple(v),
-            del: [0, 0],
-            src: "scan",
-          });
-        }
-
-        this.store.set(f.path, { size: f.size, mtime: f.mtime, vec: v });
-        if (this.textCache.size < TEXT_CACHE_LIMIT) this.textCache.set(f.path, text);
-
-        if (done % 50 === 0) {
-          this.cb.onProgress?.(done, files.length);
-          await yieldToUi();
-        }
+        if (rec && rec.size === f.size && rec.mtime === f.mtime) continue;
+        pending.push(f);
       }
+      done = files.length - pending.length;
+      this.cb.onProgress?.(done, files.length);
+
+      let cursor = 0;
+      const worker = async (): Promise<void> => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= pending.length) return;
+          const f = pending[idx];
+          const rec = this.store.get(f.path);
+
+          const text = await this.io.readFile(f.path);
+          const v = countMarkdown(text, opts);
+          changed++;
+
+          if (rec) {
+            const { add, del } = this.splitDelta(rec.vec, v);
+            if (!isZeroVec(add) || !isZeroVec(del)) {
+              entries.push({ t: Date.now(), p: f.path, add: toTuple(add), del: toTuple(del), src: "scan" });
+            }
+          } else if (!firstRun) {
+            // 快照里没有 = 关机期间新建的文件，算真实新增
+            entries.push({
+              t: Date.now(),
+              p: f.path,
+              add: toTuple(v),
+              del: [0, 0],
+              src: "scan",
+            });
+          }
+
+          this.store.set(f.path, { size: f.size, mtime: f.mtime, vec: v });
+          if (this.textCache.size < TEXT_CACHE_LIMIT) this.textCache.set(f.path, text);
+
+          done++;
+          if (done % 50 === 0) {
+            this.cb.onProgress?.(done, files.length);
+            await yieldToUi();
+          }
+        }
+      };
+      const workers = Array.from(
+        { length: Math.min(READ_CONCURRENCY, pending.length) },
+        () => worker()
+      );
+      await Promise.all(workers);
 
       // 关机期间被删掉的文件：从快照移除，记一次删除
       for (const [path, rec] of this.store.entries()) {
@@ -166,7 +184,8 @@ export class Scanner {
     await this.store.append([
       { t: Date.now(), p: path, add: [0, 0], del: toTuple(rec.vec), src: "delete" },
     ]);
-    await this.store.saveSnapshot();
+    // 批量删目录时合并成一次快照写；onunload 会 flush
+    this.store.scheduleSave(1000);
     this.cb.onChange?.();
   }
 
@@ -174,7 +193,7 @@ export class Scanner {
   async flush(): Promise<void> {
     for (const [, timer] of this.timers) window.clearTimeout(timer);
     this.timers.clear();
-    await this.store.saveSnapshot();
+    await this.store.flushSave();
   }
 
   private async processEdit(path: string): Promise<void> {
@@ -210,16 +229,12 @@ export class Scanner {
       if (first !== undefined && first !== path) this.textCache.delete(first);
     }
 
-    try {
-      const stat = this.io.listFiles().find((f) => f.path === path);
-      this.store.set(path, {
-        size: stat?.size ?? rec?.size ?? 0,
-        mtime: stat?.mtime ?? rec?.mtime ?? 0,
-        vec: v,
-      });
-    } catch {
-      this.store.set(path, { size: rec?.size ?? 0, mtime: rec?.mtime ?? 0, vec: v });
-    }
+    const stat = this.io.statFile(path);
+    this.store.set(path, {
+      size: stat?.size ?? rec?.size ?? 0,
+      mtime: stat?.mtime ?? rec?.mtime ?? 0,
+      vec: v,
+    });
 
     if (!isZeroVec(add) || !isZeroVec(del)) {
       await this.store.append([

@@ -12,7 +12,7 @@ import {
   type ParsedBackup,
 } from "./backup";
 import { BackupPickerModal, RestoreConfirmModal } from "./backupModal";
-import { StatsStore, dayKey, monthKey, type LedgerAudit } from "./store";
+import { StatsStore, MonthEntryCache, dayKey, monthKey, type LedgerAudit } from "./store";
 import { detectLang, L, setLang } from "./i18n";
 import { Scanner } from "./scanner";
 import { StatsView, VIEW_TYPE_STATS, type DayBar, type HealthInfo, type PanelData, type ProjectFileRow, type ProjectRow } from "./view";
@@ -70,9 +70,12 @@ function deviceId(): string {
     return "local";
   }
 }
-const LEDGER_TTL = 3000;
+const LEDGER_TTL = 5 * 60_000;
 const TOP_PROJECTS = 6;
 const TOP_REPORT_FILES = 10;
+
+/** 状态栏只需要这几项；面板关闭时不构建热力图与项目表 */
+type StatusData = Pick<PanelData, "todayAdd" | "weekAdd" | "total" | "streak" | "health">;
 
 export default class AbacusPlugin extends Plugin {
   settings: StatsSettings = { ...DEFAULT_SETTINGS };
@@ -80,8 +83,10 @@ export default class AbacusPlugin extends Plugin {
   scanner!: Scanner;
 
   private statusBar!: HTMLElement;
-  private ledgerCache = new Map<string, { at: number; entries: LedgerEntry[] }>();
+  private ledgerCache!: MonthEntryCache;
   private refreshTimer: number | null = null;
+  private refreshPromise: Promise<void> | null = null;
+  private refreshQueued = false;
   private progress: { done: number; total: number } | null = null;
   private streakCache: { at: number; value: number } | null = null;
   private health: HealthInfo | null = null;
@@ -100,6 +105,11 @@ export default class AbacusPlugin extends Plugin {
     this.adapter = adapter;
     this.store = new StatsStore(baseDir, adapter, { version: 1, deviceId: deviceId() });
     await this.store.load();
+    this.ledgerCache = new MonthEntryCache((ym) => this.store.readMonth(ym), LEDGER_TTL);
+    this.store.onAppend((entries) => {
+      this.ledgerCache.add(entries);
+      this.streakCache = null;
+    });
 
     const io: VaultIO = {
       listFiles: (): FileStatInfo[] =>
@@ -108,6 +118,10 @@ export default class AbacusPlugin extends Plugin {
           size: f.stat.size,
           mtime: f.stat.mtime,
         })),
+      statFile: (path: string): FileStatInfo | null => {
+        const f = this.app.vault.getAbstractFileByPath(path);
+        return f instanceof TFile ? { path, size: f.stat.size, mtime: f.stat.mtime } : null;
+      },
       readFile: async (path: string): Promise<string> => {
         const f = this.app.vault.getAbstractFileByPath(path);
         if (f instanceof TFile) return this.app.vault.cachedRead(f);
@@ -119,7 +133,7 @@ export default class AbacusPlugin extends Plugin {
     this.scanner = new Scanner(io, this.store, () => this.settings, {
       onProgress: (done, total) => {
         this.progress = { done, total };
-        this.scheduleRefresh(120);
+        this.getView()?.setProgress(this.progress);
       },
       onChange: () => this.invalidate(),
       onCounted: (path) => this.queueFrontmatter(path),
@@ -227,6 +241,8 @@ export default class AbacusPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => void this.refresh(), 60_000));
 
     this.app.workspace.onLayoutReady(() => {
+      // 先用已加载的快照出旧数据，再扫描校正差值
+      void this.refresh();
       void this.initialScan();
     });
   }
@@ -242,13 +258,20 @@ export default class AbacusPlugin extends Plugin {
   private async initialScan(): Promise<void> {
     const res = await this.scanner.fullScan(false);
     this.progress = null;
+    this.getView()?.setProgress(null);
     if (res.baseline && res.files > 0) {
       new Notice(L().noticeBaseline(res.files));
     }
     await this.refresh();
-    void this.autoWeeklyReport();
-    void this.checkLedgerHealth();
-    void this.autoBackupLedger();
+    // 启动瞬间先让面板/扫描拿到磁盘；体检、周报、备份延后，避免抢 I/O
+    this.defer(() => void this.autoWeeklyReport(), 2_000);
+    this.defer(() => void this.checkLedgerHealth(), 4_000);
+    this.defer(() => void this.autoBackupLedger(), 6_000);
+  }
+
+  private defer(task: () => void, delay: number): void {
+    const id = window.setTimeout(task, delay);
+    this.register(() => window.clearTimeout(id));
   }
 
   async rebuild(): Promise<void> {
@@ -280,9 +303,14 @@ export default class AbacusPlugin extends Plugin {
   /* ------------------------------ 数据流 ------------------------------ */
 
   private invalidate(): void {
-    this.ledgerCache.clear();
     this.streakCache = null;
     this.scheduleRefresh(200);
+  }
+
+  /** 导入/恢复会改写账本文件，必须整体失效 */
+  private invalidateLedgerCache(): void {
+    this.ledgerCache.clear();
+    this.streakCache = null;
   }
 
   private scheduleRefresh(delay = 250): void {
@@ -293,15 +321,54 @@ export default class AbacusPlugin extends Plugin {
     }, delay);
   }
 
-  async refresh(): Promise<void> {
-    if (!this.store) return;
-    const data = await this.buildPanelData();
-    const view = this.getView();
-    if (view) view.setData(data);
-    this.updateStatusBar(data);
+  refresh(): Promise<void> {
+    if (!this.store) return Promise.resolve();
+    this.refreshQueued = true;
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.drainRefresh();
+    }
+    return this.refreshPromise;
   }
 
-  private updateStatusBar(data: PanelData): void {
+  /** 同一时间只跑一轮构建；期间的新请求合并到下一轮，避免重复读账本 */
+  private async drainRefresh(): Promise<void> {
+    try {
+      while (this.refreshQueued) {
+        this.refreshQueued = false;
+        await this.doRefresh();
+      }
+    } finally {
+      this.refreshPromise = null;
+      if (this.refreshQueued) void this.refresh();
+    }
+  }
+
+  private async doRefresh(): Promise<void> {
+    const view = this.getView();
+    if (view) {
+      const data = await this.buildPanelData();
+      view.setData(data);
+      this.updateStatusBar(data);
+    } else {
+      this.updateStatusBar(await this.buildStatusData());
+    }
+  }
+
+  /** 面板关闭时只算状态栏需要的数字，不建热力图与项目表 */
+  private async buildStatusData(): Promise<StatusData> {
+    const now = Date.now();
+    const weekFrom = startOfWeek(now);
+    const entries = await this.readMonths(monthsBetween(weekFrom, now + 1));
+    return {
+      todayAdd: sumWriting(entries, startOfDay(now), now + 1).add,
+      weekAdd: sumWriting(entries, weekFrom, now + 1).add,
+      total: this.store.total(),
+      streak: await this.computeStreak(),
+      health: this.health ?? undefined,
+    };
+  }
+
+  private updateStatusBar(data: StatusData): void {
     if (!this.statusBar) return;
     const t = L();
     const primary = primaryOf(data.todayAdd, this.settings.includeLatinInPrimary);
@@ -433,10 +500,10 @@ export default class AbacusPlugin extends Plugin {
     const monthFrom = startOfMonth(now);
 
     const stock = new Map<string, Vec>();
-    for (const [path, r] of this.store.entries()) {
+    this.store.forEach((path, r) => {
       const name = projectOf(path, rules);
       stock.set(name, addVec(stock.get(name) ?? vec(0, 0), r.vec));
-    }
+    });
 
     const flow = new Map<string, Vec>();
     for (const e of entries) {
@@ -495,10 +562,10 @@ export default class AbacusPlugin extends Plugin {
 
     // 本月没改动就退而显示这个项目里最重的几篇
     if (rows.length === 0) {
-      for (const [path, rec] of this.store.entries()) {
-        if (projectOf(path, rules) !== project) continue;
+      this.store.forEach((path, rec) => {
+        if (projectOf(path, rules) !== project) return;
         rows.push({ path, month: vec(0, 0), total: rec.vec });
-      }
+      });
     }
 
     return rows
@@ -540,17 +607,15 @@ export default class AbacusPlugin extends Plugin {
   }
 
   private async readMonthCached(ym: string): Promise<LedgerEntry[]> {
-    const now = Date.now();
-    const hit = this.ledgerCache.get(ym);
-    if (hit && now - hit.at < LEDGER_TTL) return hit.entries;
-    const entries = await this.store.readMonth(ym);
-    this.ledgerCache.set(ym, { at: now, entries });
-    return entries;
+    return this.ledgerCache.get(ym);
   }
 
   private async readMonths(yms: string[]): Promise<LedgerEntry[]> {
+    const parts = await Promise.all(yms.map((ym) => this.readMonthCached(ym)));
     const out: LedgerEntry[] = [];
-    for (const ym of yms) out.push(...(await this.readMonthCached(ym)));
+    for (const part of parts) {
+      for (const e of part) out.push(e);
+    }
     return out;
   }
 
@@ -947,7 +1012,7 @@ export default class AbacusPlugin extends Plugin {
 
     try {
       const res = await this.store.importEntries(fresh);
-      this.invalidate();
+      this.invalidateLedgerCache();
       await this.refresh();
       void this.refreshHealth();
       if (this.store.size() === 0) await this.rebuild();
@@ -1068,12 +1133,14 @@ export default class AbacusPlugin extends Plugin {
     const existing = workspace.getLeavesOfType(VIEW_TYPE_STATS);
     if (existing.length > 0) {
       await workspace.revealLeaf(existing[0]);
+      void this.refresh();
       return;
     }
     const leaf = workspace.getRightLeaf(false);
     if (!leaf) return;
     await leaf.setViewState({ type: VIEW_TYPE_STATS, active: true });
     await workspace.revealLeaf(leaf);
+    void this.refresh();
   }
 
   private getView(): StatsView | null {

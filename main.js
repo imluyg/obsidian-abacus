@@ -680,15 +680,16 @@ function deviceId() {
         return "local";
     }
 }
-const LEDGER_TTL = 3000;
+const LEDGER_TTL = 5 * 60000;
 const TOP_PROJECTS = 6;
 const TOP_REPORT_FILES = 10;
 class AbacusPlugin extends obsidian_1.Plugin {
     constructor() {
         super(...arguments);
         this.settings = { ...types_1.DEFAULT_SETTINGS };
-        this.ledgerCache = new Map();
         this.refreshTimer = null;
+        this.refreshPromise = null;
+        this.refreshQueued = false;
         this.progress = null;
         this.streakCache = null;
         this.health = null;
@@ -705,12 +706,21 @@ class AbacusPlugin extends obsidian_1.Plugin {
         this.adapter = adapter;
         this.store = new store_1.StatsStore(baseDir, adapter, { version: 1, deviceId: deviceId() });
         await this.store.load();
+        this.ledgerCache = new store_1.MonthEntryCache((ym) => this.store.readMonth(ym), LEDGER_TTL);
+        this.store.onAppend((entries) => {
+            this.ledgerCache.add(entries);
+            this.streakCache = null;
+        });
         const io = {
             listFiles: () => this.app.vault.getMarkdownFiles().map((f) => ({
                 path: f.path,
                 size: f.stat.size,
                 mtime: f.stat.mtime,
             })),
+            statFile: (path) => {
+                const f = this.app.vault.getAbstractFileByPath(path);
+                return f instanceof obsidian_1.TFile ? { path, size: f.stat.size, mtime: f.stat.mtime } : null;
+            },
             readFile: async (path) => {
                 const f = this.app.vault.getAbstractFileByPath(path);
                 if (f instanceof obsidian_1.TFile)
@@ -721,8 +731,9 @@ class AbacusPlugin extends obsidian_1.Plugin {
         };
         this.scanner = new scanner_1.Scanner(io, this.store, () => this.settings, {
             onProgress: (done, total) => {
+                var _a;
                 this.progress = { done, total };
-                this.scheduleRefresh(120);
+                (_a = this.getView()) === null || _a === void 0 ? void 0 : _a.setProgress(this.progress);
             },
             onChange: () => this.invalidate(),
             onCounted: (path) => this.queueFrontmatter(path),
@@ -814,6 +825,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         }));
         this.registerInterval(window.setInterval(() => void this.refresh(), 60000));
         this.app.workspace.onLayoutReady(() => {
+            void this.refresh();
             void this.initialScan();
         });
     }
@@ -825,15 +837,21 @@ class AbacusPlugin extends obsidian_1.Plugin {
         this.app.workspace.detachLeavesOfType(view_1.VIEW_TYPE_STATS);
     }
     async initialScan() {
+        var _a;
         const res = await this.scanner.fullScan(false);
         this.progress = null;
+        (_a = this.getView()) === null || _a === void 0 ? void 0 : _a.setProgress(null);
         if (res.baseline && res.files > 0) {
             new obsidian_1.Notice((0, i18n_1.L)().noticeBaseline(res.files));
         }
         await this.refresh();
-        void this.autoWeeklyReport();
-        void this.checkLedgerHealth();
-        void this.autoBackupLedger();
+        this.defer(() => void this.autoWeeklyReport(), 2000);
+        this.defer(() => void this.checkLedgerHealth(), 4000);
+        this.defer(() => void this.autoBackupLedger(), 6000);
+    }
+    defer(task, delay) {
+        const id = window.setTimeout(task, delay);
+        this.register(() => window.clearTimeout(id));
     }
     async rebuild() {
         new obsidian_1.Notice((0, i18n_1.L)().noticeRebuilding);
@@ -861,9 +879,12 @@ class AbacusPlugin extends obsidian_1.Plugin {
         }
     }
     invalidate() {
-        this.ledgerCache.clear();
         this.streakCache = null;
         this.scheduleRefresh(200);
+    }
+    invalidateLedgerCache() {
+        this.ledgerCache.clear();
+        this.streakCache = null;
     }
     scheduleRefresh(delay = 250) {
         if (this.refreshTimer !== null)
@@ -873,14 +894,51 @@ class AbacusPlugin extends obsidian_1.Plugin {
             void this.refresh();
         }, delay);
     }
-    async refresh() {
+    refresh() {
         if (!this.store)
-            return;
-        const data = await this.buildPanelData();
+            return Promise.resolve();
+        this.refreshQueued = true;
+        if (!this.refreshPromise) {
+            this.refreshPromise = this.drainRefresh();
+        }
+        return this.refreshPromise;
+    }
+    async drainRefresh() {
+        try {
+            while (this.refreshQueued) {
+                this.refreshQueued = false;
+                await this.doRefresh();
+            }
+        }
+        finally {
+            this.refreshPromise = null;
+            if (this.refreshQueued)
+                void this.refresh();
+        }
+    }
+    async doRefresh() {
         const view = this.getView();
-        if (view)
+        if (view) {
+            const data = await this.buildPanelData();
             view.setData(data);
-        this.updateStatusBar(data);
+            this.updateStatusBar(data);
+        }
+        else {
+            this.updateStatusBar(await this.buildStatusData());
+        }
+    }
+    async buildStatusData() {
+        var _a;
+        const now = Date.now();
+        const weekFrom = (0, stats_1.startOfWeek)(now);
+        const entries = await this.readMonths((0, stats_1.monthsBetween)(weekFrom, now + 1));
+        return {
+            todayAdd: (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1).add,
+            weekAdd: (0, stats_1.sumWriting)(entries, weekFrom, now + 1).add,
+            total: this.store.total(),
+            streak: await this.computeStreak(),
+            health: (_a = this.health) !== null && _a !== void 0 ? _a : undefined,
+        };
     }
     updateStatusBar(data) {
         if (!this.statusBar)
@@ -990,14 +1048,15 @@ class AbacusPlugin extends obsidian_1.Plugin {
         };
     }
     buildProjects(entries, now) {
-        var _a, _b, _c;
+        var _a, _b;
         const rules = (0, stats_1.parseProjectRules)(this.settings.projectRules);
         const monthFrom = (0, stats_1.startOfMonth)(now);
         const stock = new Map();
-        for (const [path, r] of this.store.entries()) {
+        this.store.forEach((path, r) => {
+            var _a;
             const name = (0, stats_1.projectOf)(path, rules);
             stock.set(name, (0, types_1.addVec)((_a = stock.get(name)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0), r.vec));
-        }
+        });
         const flow = new Map();
         for (const e of entries) {
             if (e.t < monthFrom || e.t > now)
@@ -1005,11 +1064,11 @@ class AbacusPlugin extends obsidian_1.Plugin {
             if (!(0, stats_1.isWritingEntry)(e))
                 continue;
             const name = (0, stats_1.projectOf)(e.p, rules);
-            flow.set(name, (0, types_1.addVec)((_b = flow.get(name)) !== null && _b !== void 0 ? _b : (0, types_1.vec)(0, 0), (0, types_1.vec)(e.add[0], e.add[1])));
+            flow.set(name, (0, types_1.addVec)((_a = flow.get(name)) !== null && _a !== void 0 ? _a : (0, types_1.vec)(0, 0), (0, types_1.vec)(e.add[0], e.add[1])));
         }
         const rows = [];
         for (const [name, total] of stock) {
-            rows.push({ name, month: (_c = flow.get(name)) !== null && _c !== void 0 ? _c : (0, types_1.vec)(0, 0), total });
+            rows.push({ name, month: (_b = flow.get(name)) !== null && _b !== void 0 ? _b : (0, types_1.vec)(0, 0), total });
         }
         for (const [name, month] of flow) {
             if (!stock.has(name))
@@ -1054,11 +1113,11 @@ class AbacusPlugin extends obsidian_1.Plugin {
             });
         });
         if (rows.length === 0) {
-            for (const [path, rec] of this.store.entries()) {
+            this.store.forEach((path, rec) => {
                 if ((0, stats_1.projectOf)(path, rules) !== project)
-                    continue;
+                    return;
                 rows.push({ path, month: (0, types_1.vec)(0, 0), total: rec.vec });
-            }
+            });
         }
         return rows
             .sort((a, b) => b.month.cjk - a.month.cjk || b.total.cjk - a.total.cjk)
@@ -1092,18 +1151,15 @@ class AbacusPlugin extends obsidian_1.Plugin {
         return value;
     }
     async readMonthCached(ym) {
-        const now = Date.now();
-        const hit = this.ledgerCache.get(ym);
-        if (hit && now - hit.at < LEDGER_TTL)
-            return hit.entries;
-        const entries = await this.store.readMonth(ym);
-        this.ledgerCache.set(ym, { at: now, entries });
-        return entries;
+        return this.ledgerCache.get(ym);
     }
     async readMonths(yms) {
+        const parts = await Promise.all(yms.map((ym) => this.readMonthCached(ym)));
         const out = [];
-        for (const ym of yms)
-            out.push(...(await this.readMonthCached(ym)));
+        for (const part of parts) {
+            for (const e of part)
+                out.push(e);
+        }
         return out;
     }
     async writeYearReport(year = new Date().getFullYear()) {
@@ -1453,7 +1509,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         }
         try {
             const res = await this.store.importEntries(fresh);
-            this.invalidate();
+            this.invalidateLedgerCache();
             await this.refresh();
             void this.refreshHealth();
             if (this.store.size() === 0)
@@ -1565,6 +1621,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const existing = workspace.getLeavesOfType(view_1.VIEW_TYPE_STATS);
         if (existing.length > 0) {
             await workspace.revealLeaf(existing[0]);
+            void this.refresh();
             return;
         }
         const leaf = workspace.getRightLeaf(false);
@@ -1572,6 +1629,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
             return;
         await leaf.setViewState({ type: view_1.VIEW_TYPE_STATS, active: true });
         await workspace.revealLeaf(leaf);
+        void this.refresh();
     }
     getView() {
         const leaves = this.app.workspace.getLeavesOfType(view_1.VIEW_TYPE_STATS);
@@ -1787,6 +1845,7 @@ const types_1 = require("./types");
 const counter_1 = require("./counter");
 const stats_1 = require("./stats");
 const TEXT_CACHE_LIMIT = 32;
+const READ_CONCURRENCY = 4;
 class Scanner {
     constructor(io, store, getSettings, cb = {}) {
         this.io = io;
@@ -1804,7 +1863,7 @@ class Scanner {
         return (0, stats_1.isExcludedPath)(path, this.getSettings());
     }
     async fullScan(rebaseline = false) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e, _f;
         if (this.scanning)
             return { files: 0, changed: 0, baseline: false };
         this.scanning = true;
@@ -1814,6 +1873,7 @@ class Scanner {
         const firstRun = this.store.size() === 0;
         const files = this.io.listFiles().filter((f) => !this.isExcluded(f.path));
         const seen = new Set();
+        const pending = [];
         const entries = [];
         let changed = 0;
         let done = 0;
@@ -1821,38 +1881,51 @@ class Scanner {
             for (const f of files) {
                 seen.add(f.path);
                 const rec = this.store.get(f.path);
-                done++;
-                if (rec && rec.size === f.size && rec.mtime === f.mtime) {
-                    if (done % 200 === 0)
-                        (_b = (_a = this.cb).onProgress) === null || _b === void 0 ? void 0 : _b.call(_a, done, files.length);
+                if (rec && rec.size === f.size && rec.mtime === f.mtime)
                     continue;
-                }
-                const text = await this.io.readFile(f.path);
-                const v = (0, counter_1.countMarkdown)(text, opts);
-                changed++;
-                if (rec) {
-                    const { add, del } = this.splitDelta(rec.vec, v);
-                    if (!(0, types_1.isZeroVec)(add) || !(0, types_1.isZeroVec)(del)) {
-                        entries.push({ t: Date.now(), p: f.path, add: toTuple(add), del: toTuple(del), src: "scan" });
+                pending.push(f);
+            }
+            done = files.length - pending.length;
+            (_b = (_a = this.cb).onProgress) === null || _b === void 0 ? void 0 : _b.call(_a, done, files.length);
+            let cursor = 0;
+            const worker = async () => {
+                var _a, _b;
+                while (true) {
+                    const idx = cursor++;
+                    if (idx >= pending.length)
+                        return;
+                    const f = pending[idx];
+                    const rec = this.store.get(f.path);
+                    const text = await this.io.readFile(f.path);
+                    const v = (0, counter_1.countMarkdown)(text, opts);
+                    changed++;
+                    if (rec) {
+                        const { add, del } = this.splitDelta(rec.vec, v);
+                        if (!(0, types_1.isZeroVec)(add) || !(0, types_1.isZeroVec)(del)) {
+                            entries.push({ t: Date.now(), p: f.path, add: toTuple(add), del: toTuple(del), src: "scan" });
+                        }
+                    }
+                    else if (!firstRun) {
+                        entries.push({
+                            t: Date.now(),
+                            p: f.path,
+                            add: toTuple(v),
+                            del: [0, 0],
+                            src: "scan",
+                        });
+                    }
+                    this.store.set(f.path, { size: f.size, mtime: f.mtime, vec: v });
+                    if (this.textCache.size < TEXT_CACHE_LIMIT)
+                        this.textCache.set(f.path, text);
+                    done++;
+                    if (done % 50 === 0) {
+                        (_b = (_a = this.cb).onProgress) === null || _b === void 0 ? void 0 : _b.call(_a, done, files.length);
+                        await yieldToUi();
                     }
                 }
-                else if (!firstRun) {
-                    entries.push({
-                        t: Date.now(),
-                        p: f.path,
-                        add: toTuple(v),
-                        del: [0, 0],
-                        src: "scan",
-                    });
-                }
-                this.store.set(f.path, { size: f.size, mtime: f.mtime, vec: v });
-                if (this.textCache.size < TEXT_CACHE_LIMIT)
-                    this.textCache.set(f.path, text);
-                if (done % 50 === 0) {
-                    (_d = (_c = this.cb).onProgress) === null || _d === void 0 ? void 0 : _d.call(_c, done, files.length);
-                    await yieldToUi();
-                }
-            }
+            };
+            const workers = Array.from({ length: Math.min(READ_CONCURRENCY, pending.length) }, () => worker());
+            await Promise.all(workers);
             for (const [path, rec] of this.store.entries()) {
                 if (seen.has(path))
                     continue;
@@ -1871,12 +1944,12 @@ class Scanner {
             }
             await this.store.append(entries);
             await this.store.saveSnapshot();
-            (_f = (_e = this.cb).onProgress) === null || _f === void 0 ? void 0 : _f.call(_e, files.length, files.length);
+            (_d = (_c = this.cb).onProgress) === null || _d === void 0 ? void 0 : _d.call(_c, files.length, files.length);
             return { files: files.length, changed, baseline: firstRun };
         }
         finally {
             this.scanning = false;
-            (_h = (_g = this.cb).onChange) === null || _h === void 0 ? void 0 : _h.call(_g);
+            (_f = (_e = this.cb).onChange) === null || _f === void 0 ? void 0 : _f.call(_e);
         }
     }
     scheduleEdit(path) {
@@ -1915,23 +1988,23 @@ class Scanner {
         await this.store.append([
             { t: Date.now(), p: path, add: [0, 0], del: toTuple(rec.vec), src: "delete" },
         ]);
-        await this.store.saveSnapshot();
+        this.store.scheduleSave(1000);
         (_b = (_a = this.cb).onChange) === null || _b === void 0 ? void 0 : _b.call(_a);
     }
     async flush() {
         for (const [, timer] of this.timers)
             window.clearTimeout(timer);
         this.timers.clear();
-        await this.store.saveSnapshot();
+        await this.store.flushSave();
     }
     async processEdit(path) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const opts = this.getSettings();
         let text;
         try {
             text = await this.io.readFile(path);
         }
-        catch (_l) {
+        catch (_j) {
             return;
         }
         const v = (0, counter_1.countMarkdown)(text, opts);
@@ -1959,25 +2032,20 @@ class Scanner {
             if (first !== undefined && first !== path)
                 this.textCache.delete(first);
         }
-        try {
-            const stat = this.io.listFiles().find((f) => f.path === path);
-            this.store.set(path, {
-                size: (_b = (_a = stat === null || stat === void 0 ? void 0 : stat.size) !== null && _a !== void 0 ? _a : rec === null || rec === void 0 ? void 0 : rec.size) !== null && _b !== void 0 ? _b : 0,
-                mtime: (_d = (_c = stat === null || stat === void 0 ? void 0 : stat.mtime) !== null && _c !== void 0 ? _c : rec === null || rec === void 0 ? void 0 : rec.mtime) !== null && _d !== void 0 ? _d : 0,
-                vec: v,
-            });
-        }
-        catch (_m) {
-            this.store.set(path, { size: (_e = rec === null || rec === void 0 ? void 0 : rec.size) !== null && _e !== void 0 ? _e : 0, mtime: (_f = rec === null || rec === void 0 ? void 0 : rec.mtime) !== null && _f !== void 0 ? _f : 0, vec: v });
-        }
+        const stat = this.io.statFile(path);
+        this.store.set(path, {
+            size: (_b = (_a = stat === null || stat === void 0 ? void 0 : stat.size) !== null && _a !== void 0 ? _a : rec === null || rec === void 0 ? void 0 : rec.size) !== null && _b !== void 0 ? _b : 0,
+            mtime: (_d = (_c = stat === null || stat === void 0 ? void 0 : stat.mtime) !== null && _c !== void 0 ? _c : rec === null || rec === void 0 ? void 0 : rec.mtime) !== null && _d !== void 0 ? _d : 0,
+            vec: v,
+        });
         if (!(0, types_1.isZeroVec)(add) || !(0, types_1.isZeroVec)(del)) {
             await this.store.append([
                 { t: Date.now(), p: path, add: toTuple(add), del: toTuple(del), src: "edit" },
             ]);
-            (_h = (_g = this.cb).onCounted) === null || _h === void 0 ? void 0 : _h.call(_g, path, v);
+            (_f = (_e = this.cb).onCounted) === null || _f === void 0 ? void 0 : _f.call(_e, path, v);
         }
         this.store.scheduleSave();
-        (_k = (_j = this.cb).onChange) === null || _k === void 0 ? void 0 : _k.call(_j);
+        (_h = (_g = this.cb).onChange) === null || _h === void 0 ? void 0 : _h.call(_g);
     }
     splitDelta(prev, next) {
         const d = (0, types_1.subVec)(next, prev);
@@ -2238,11 +2306,17 @@ function sumDeletions(entries, from, to) {
     return s;
 }
 function sumByMonth(entries, year, now = Date.now()) {
-    const out = [];
-    for (let m = 0; m < 12; m++) {
-        const from = new Date(year, m, 1).getTime();
-        const to = new Date(year, m + 1, 1).getTime();
-        out.push(sumWriting(entries, from, Math.min(to, now + 1)).add);
+    const out = Array.from({ length: 12 }, () => (0, types_1.vec)(0, 0));
+    const limit = now + 1;
+    for (const e of entries) {
+        if (e.t >= limit)
+            continue;
+        if (!WRITE_SRC.has(e.src))
+            continue;
+        const d = new Date(e.t);
+        if (d.getFullYear() !== year)
+            continue;
+        out[d.getMonth()] = (0, types_1.addVec)(out[d.getMonth()], (0, types_1.vec)(e.add[0], e.add[1]));
     }
     return out;
 }
@@ -2479,7 +2553,7 @@ function weekdayCN(ts) {
 __modules["store.ts"] = function (module, exports, require) {
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ZERO = exports.StatsStore = void 0;
+exports.ZERO = exports.MonthEntryCache = exports.StatsStore = void 0;
 exports.parseLedgerReport = parseLedgerReport;
 exports.parseLedger = parseLedger;
 exports.dedupeEntries = dedupeEntries;
@@ -2499,6 +2573,8 @@ class StatsStore {
         this.loaded = false;
         this.saveTimer = null;
         this.lastSize = new Map();
+        this.ensuredDirs = new Set();
+        this.appendListeners = [];
         this.repairs = [];
     }
     get snapshotVersion() {
@@ -2511,11 +2587,26 @@ class StatsStore {
     get isLoaded() {
         return this.loaded;
     }
+    onAppend(cb) {
+        this.appendListeners.push(cb);
+    }
+    notifyAppend(entries) {
+        for (const cb of this.appendListeners)
+            cb(entries);
+    }
     clear() {
         this.records.clear();
+        if (this.saveTimer !== null) {
+            window.clearTimeout(this.saveTimer);
+            this.saveTimer = null;
+        }
     }
     entries() {
         return [...this.records.entries()];
+    }
+    forEach(cb) {
+        for (const [path, rec] of this.records)
+            cb(path, rec);
     }
     get(path) {
         return this.records.get(path);
@@ -2541,10 +2632,10 @@ class StatsStore {
     total() {
         let cjk = 0;
         let lat = 0;
-        for (const [, r] of this.records) {
+        this.forEach((_path, r) => {
             cjk += r.vec.cjk;
             lat += r.vec.lat;
-        }
+        });
         return (0, types_1.vec)(cjk, lat);
     }
     async load() {
@@ -2598,33 +2689,46 @@ class StatsStore {
                 continue;
             const ym = monthKey(e.t);
             const line = JSON.stringify(e);
-            const arr = byMonth.get(ym);
-            if (arr)
-                arr.push(line);
-            else
-                byMonth.set(ym, [line]);
+            const group = byMonth.get(ym);
+            if (group) {
+                group.entries.push(e);
+                group.lines.push(line);
+            }
+            else {
+                byMonth.set(ym, { entries: [e], lines: [line] });
+            }
         }
         if (byMonth.size === 0)
             return;
         await this.ensureDir("stats");
         await this.ensureDir(LEDGER_REL);
-        for (const [ym, lines] of byMonth) {
-            const full = this.path(this.ledgerPath(ym));
-            const payload = lines.join("\n") + "\n";
-            if (await this.tryFastAppend(full, payload))
-                continue;
-            let prev = "";
-            try {
-                prev = await this.adapter.read(full);
+        const written = [];
+        try {
+            for (const [ym, group] of byMonth) {
+                const full = this.path(this.ledgerPath(ym));
+                const payload = group.lines.join("\n") + "\n";
+                if (await this.tryFastAppend(full, payload)) {
+                    written.push(...group.entries);
+                    continue;
+                }
+                let prev = "";
+                try {
+                    prev = await this.adapter.read(full);
+                }
+                catch (_a) {
+                    prev = "";
+                }
+                const { text, dropped } = repairTail(prev);
+                if (dropped > 0)
+                    this.repairs.push({ ym, dropped });
+                await this.adapter.write(full, text + payload);
+                written.push(...group.entries);
+                await this.rememberSize(full);
             }
-            catch (_a) {
-                prev = "";
-            }
-            const { text, dropped } = repairTail(prev);
-            if (dropped > 0)
-                this.repairs.push({ ym, dropped });
-            await this.adapter.write(full, text + payload);
-            await this.rememberSize(full);
+        }
+        finally {
+            if (written.length > 0)
+                this.notifyAppend(written);
         }
     }
     async tryFastAppend(full, payload) {
@@ -2643,9 +2747,13 @@ class StatsStore {
     async rememberSize(full) {
         if (!this.adapter.stat)
             return;
-        const st = await this.adapter.stat(full);
-        if (st)
-            this.lastSize.set(full, st.size);
+        try {
+            const st = await this.adapter.stat(full);
+            if (st)
+                this.lastSize.set(full, st.size);
+        }
+        catch (_a) {
+        }
     }
     async readMonth(ym) {
         const files = await this.listMonthFiles(ym);
@@ -2793,15 +2901,90 @@ class StatsStore {
     }
     async ensureDir(rel) {
         const p = this.path(rel);
+        if (this.ensuredDirs.has(p))
+            return;
         try {
             if (!(await this.adapter.exists(p)))
                 await this.adapter.mkdir(p);
+            this.ensuredDirs.add(p);
         }
         catch (_a) {
         }
     }
 }
 exports.StatsStore = StatsStore;
+class MonthEntryCache {
+    constructor(load, ttlMs, clock = () => Date.now()) {
+        this.load = load;
+        this.ttlMs = ttlMs;
+        this.clock = clock;
+        this.months = new Map();
+        this.pending = new Map();
+        this.pendingAdds = new Map();
+        this.generation = 0;
+    }
+    async get(ym) {
+        const hit = this.months.get(ym);
+        if (hit && this.clock() - hit.at < this.ttlMs)
+            return hit.entries;
+        const inFlight = this.pending.get(ym);
+        if (inFlight)
+            return inFlight;
+        const gen = this.generation;
+        const extra = [];
+        this.pendingAdds.set(ym, extra);
+        const promise = this.load(ym).then((entries) => {
+            if (gen === this.generation) {
+                const merged = extra.length > 0 ? mergeEntries(entries, extra) : entries;
+                this.months.set(ym, { at: this.clock(), entries: merged });
+                this.pendingAdds.delete(ym);
+                this.pending.delete(ym);
+                return merged;
+            }
+            return entries;
+        }, (err) => {
+            if (gen === this.generation) {
+                this.pendingAdds.delete(ym);
+                this.pending.delete(ym);
+            }
+            throw err;
+        });
+        this.pending.set(ym, promise);
+        return promise;
+    }
+    add(entries) {
+        for (const e of entries) {
+            const ym = monthKey(e.t);
+            const loading = this.pendingAdds.get(ym);
+            if (loading) {
+                loading.push(e);
+                continue;
+            }
+            const hit = this.months.get(ym);
+            if (hit)
+                hit.entries.push(e);
+        }
+    }
+    clear() {
+        this.generation++;
+        this.months.clear();
+        this.pending.clear();
+        this.pendingAdds.clear();
+    }
+}
+exports.MonthEntryCache = MonthEntryCache;
+function mergeEntries(base, extra) {
+    const seen = new Set(base.map(types_1.entryKey));
+    const out = base.slice();
+    for (const e of extra) {
+        const key = (0, types_1.entryKey)(e);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        out.push(e);
+    }
+    return out;
+}
 function parseLedgerReport(raw) {
     const entries = [];
     let bad = 0;
@@ -2942,6 +3125,7 @@ class StatsView extends obsidian_1.ItemView {
         super(leaf);
         this.hooks = hooks;
         this.data = null;
+        this.progressEl = null;
     }
     getViewType() {
         return exports.VIEW_TYPE_STATS;
@@ -2962,18 +3146,32 @@ class StatsView extends obsidian_1.ItemView {
         this.data = data;
         this.render();
     }
+    setProgress(progress) {
+        const el = this.progressEl;
+        if (!el)
+            return;
+        if (progress) {
+            el.style.display = "";
+            el.setText((0, i18n_1.L)().scanning(progress.done, progress.total));
+        }
+        else {
+            el.style.display = "none";
+        }
+    }
     render() {
-        var _a, _b, _c;
+        var _a, _b, _c, _d, _e;
         const t = (0, i18n_1.L)();
         const root = this.contentEl;
-        root.empty();
+        const prevScrollTop = root.scrollTop;
+        const prevHeatScroll = (_b = (_a = root.querySelector(".scs-heat-scroll")) === null || _a === void 0 ? void 0 : _a.scrollLeft) !== null && _b !== void 0 ? _b : 0;
+        const host = document.createElement("div");
         root.addClass("scs-panel");
-        const header = root.createDiv({ cls: "scs-header" });
+        const header = host.createDiv({ cls: "scs-header" });
         header.createDiv({ cls: "scs-title", text: t.today });
         const buttons = header.createDiv({ cls: "scs-header-actions" });
         for (const r of RANGES) {
             const b = buttons.createEl("button", {
-                cls: "scs-range-btn" + (((_a = this.data) === null || _a === void 0 ? void 0 : _a.range) === r ? " is-active" : ""),
+                cls: "scs-range-btn" + (((_c = this.data) === null || _c === void 0 ? void 0 : _c.range) === r ? " is-active" : ""),
                 text: r === 0 ? t.rangeCumulative : r === 365 ? t.rangeYear : t.rangeDays(r),
             });
             b.onclick = () => this.hooks.onRange(r);
@@ -2984,21 +3182,23 @@ class StatsView extends obsidian_1.ItemView {
         });
         (0, obsidian_1.setIcon)(refresh, "refresh-cw");
         refresh.onclick = () => this.hooks.onRescan();
+        const progressEl = host.createDiv({ cls: "scs-progress" });
+        this.progressEl = progressEl;
+        progressEl.style.display = "none";
         if (!this.data) {
-            root.createDiv({ cls: "scs-empty", text: t.reading });
+            host.createDiv({ cls: "scs-empty", text: t.reading });
+            this.commit(root, host, prevScrollTop, prevHeatScroll);
             return;
         }
         const d = this.data;
         if (d.scanning && d.progress) {
-            root.createDiv({
-                cls: "scs-progress",
-                text: t.scanning(d.progress.done, d.progress.total),
-            });
+            progressEl.style.display = "";
+            progressEl.setText(t.scanning(d.progress.done, d.progress.total));
         }
-        const hero = root.createDiv({ cls: "scs-hero" });
+        const hero = host.createDiv({ cls: "scs-hero" });
         hero.createDiv({ cls: "scs-hero-num", text: fmt(d.todayAdd.cjk) });
         hero.createDiv({ cls: "scs-hero-unit", text: t.cjk });
-        const heroSub = root.createDiv({ cls: "scs-hero-sub" });
+        const heroSub = host.createDiv({ cls: "scs-hero-sub" });
         heroSub.createSpan({ text: t.latinWords(fmt(d.todayAdd.lat)) });
         if (d.todayDel.cjk > 0 || d.todayDel.lat > 0) {
             heroSub.createSpan({
@@ -3011,7 +3211,7 @@ class StatsView extends obsidian_1.ItemView {
         }
         if (d.dailyGoal > 0) {
             const pct = Math.min(100, Math.round((d.todayAdd.cjk / d.dailyGoal) * 100));
-            const goal = root.createDiv({ cls: "scs-goal" });
+            const goal = host.createDiv({ cls: "scs-goal" });
             if (d.todayAdd.cjk >= d.dailyGoal)
                 goal.addClass("is-done");
             const track = goal.createDiv({ cls: "scs-goal-track" });
@@ -3021,7 +3221,7 @@ class StatsView extends obsidian_1.ItemView {
                 text: t.goalText(fmt(d.todayAdd.cjk), fmt(d.dailyGoal), pct),
             });
         }
-        const chartWrap = root.createDiv({ cls: "scs-chart-wrap" });
+        const chartWrap = host.createDiv({ cls: "scs-chart-wrap" });
         const chart = chartWrap.createDiv({
             cls: "scs-chart" + (d.range === 90 || d.days.length > 24 ? " is-dense" : ""),
         });
@@ -3044,21 +3244,21 @@ class StatsView extends obsidian_1.ItemView {
         if (d.range === 0) {
             chartWrap.createDiv({ cls: "scs-chart-note", text: t.cumulativeNote });
         }
-        this.renderHeatmap(root, d.heat);
-        const grid = root.createDiv({ cls: "scs-grid" });
+        this.renderHeatmap(host, d.heat);
+        const grid = host.createDiv({ cls: "scs-grid" });
         this.metric(grid, t.week, d.weekAdd);
         this.metric(grid, t.month, d.monthAdd);
         this.metric(grid, t.all, d.total);
         if (d.weeklyGoal > 0) {
             const pct = Math.min(100, Math.round((d.weekAdd.cjk / d.weeklyGoal) * 100));
-            const line = root.createDiv({
+            const line = host.createDiv({
                 cls: "scs-goal-line" + (d.weekAdd.cjk >= d.weeklyGoal ? " is-done" : ""),
                 text: t.weekGoalText(fmt(d.weekAdd.cjk), fmt(d.weeklyGoal), pct),
             });
             line.setAttr("title", t.weekGoalTitle(fmt(d.weeklyGoal)));
         }
         if (d.projects.length > 0) {
-            const proj = root.createDiv({ cls: "scs-projects" });
+            const proj = host.createDiv({ cls: "scs-projects" });
             proj.createDiv({ cls: "scs-section-title", text: t.projects });
             const head = proj.createDiv({ cls: "scs-project-row is-head" });
             head.createDiv({ cls: "scs-project-name", text: "" });
@@ -3083,7 +3283,7 @@ class StatsView extends obsidian_1.ItemView {
                 }
                 for (const f of d.projectFiles) {
                     const item = files.createDiv({ cls: "scs-file-row" });
-                    item.createDiv({ cls: "scs-file-name", text: (_b = f.path.split("/").pop()) !== null && _b !== void 0 ? _b : f.path });
+                    item.createDiv({ cls: "scs-file-name", text: (_d = f.path.split("/").pop()) !== null && _d !== void 0 ? _d : f.path });
                     item.createDiv({
                         cls: "scs-file-num",
                         text: f.month.cjk > 0 ? `+${fmt(f.month.cjk)}` : fmt(f.total.cjk),
@@ -3093,18 +3293,18 @@ class StatsView extends obsidian_1.ItemView {
             }
         }
         if (d.current) {
-            const cur = root.createDiv({ cls: "scs-current" });
+            const cur = host.createDiv({ cls: "scs-current" });
             cur.createDiv({ cls: "scs-current-label", text: t.currentFile });
             cur.createDiv({
                 cls: "scs-current-name",
-                text: (_c = d.current.path.split("/").pop()) !== null && _c !== void 0 ? _c : d.current.path,
+                text: (_e = d.current.path.split("/").pop()) !== null && _e !== void 0 ? _e : d.current.path,
             });
             cur.createDiv({
                 cls: "scs-current-num",
                 text: t.currentNum(fmt(d.current.vec.cjk), fmt(d.current.vec.lat)),
             });
         }
-        const healthEl = root.createDiv({ cls: "scs-health" });
+        const healthEl = host.createDiv({ cls: "scs-health" });
         if (!d.health) {
             healthEl.setText(t.healthChecking);
         }
@@ -3121,7 +3321,15 @@ class StatsView extends obsidian_1.ItemView {
             hour: "2-digit",
             minute: "2-digit",
         });
-        root.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
+        host.createDiv({ cls: "scs-foot", text: t.foot(fmt(d.fileCount), time) });
+        this.commit(root, host, prevScrollTop, prevHeatScroll);
+    }
+    commit(root, host, prevTop, prevHeat) {
+        root.replaceChildren(host);
+        root.scrollTop = prevTop;
+        const heatScroll = root.querySelector(".scs-heat-scroll");
+        if (heatScroll)
+            heatScroll.scrollLeft = prevHeat;
     }
     renderHeatmap(parent, heat) {
         const t = (0, i18n_1.L)();
@@ -3167,8 +3375,11 @@ class StatsView extends obsidian_1.ItemView {
                             cls: "scs-heat-fill",
                             attr: { style: `opacity:${opacities[lv]}` },
                         });
+                        cell.title = t.chartTip(day.day, fmt(day.vec.cjk), fmt(day.vec.lat));
                     }
-                    cell.title = t.chartTip(day.day, fmt(day.vec.cjk), fmt(day.vec.lat));
+                    else {
+                        cell.title = day.day;
+                    }
                 }
                 if (day.isToday)
                     cell.addClass("is-today");

@@ -166,6 +166,8 @@ export interface FileStatInfo {
 /** 插件拿到的 vault 只读视图，抽成接口是为了能在 Node 里跑测试 */
 export interface VaultIO {
   listFiles(): FileStatInfo[];
+  /** 单个文件的 stat；编辑热路径用它，避免遍历全库 */
+  statFile(path: string): FileStatInfo | null;
   readFile(path: string): Promise<string>;
   /** 存放统计数据的适配器（.obsidian/plugins/abacus 下） */
   adapter: StatsAdapter;

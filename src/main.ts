@@ -155,6 +155,7 @@ export default class AbacusPlugin extends Plugin {
     this.statusBar.setText(L().reading);
     this.statusBar.onclick = () => void this.activateView();
     this.statusBar.title = L().statusTitleClick;
+    this.syncStatusBarVisibility();
 
     this.addRibbonIcon("calculator", L().viewName, () => void this.activateView());
 
@@ -368,18 +369,33 @@ export default class AbacusPlugin extends Plugin {
     };
   }
 
+  /** 隐藏时清空文本与 tooltip；返回当前是否应该显示 */
+  private syncStatusBarVisibility(): boolean {
+    if (!this.statusBar) return false;
+    if (this.settings.statusBarMode === "off") {
+      this.statusBar.style.display = "none";
+      this.statusBar.setText("");
+      this.statusBar.title = "";
+      return false;
+    }
+    this.statusBar.style.display = "";
+    return true;
+  }
+
   private updateStatusBar(data: StatusData): void {
-    if (!this.statusBar) return;
+    if (!this.syncStatusBarVisibility()) return;
     const t = L();
+    const mode = this.settings.statusBarMode;
     const primary = primaryOf(data.todayAdd, this.settings.includeLatinInPrimary);
     const warn = data.health && !data.health.ok ? " ⚠" : "";
     const c = data.todayAdd.cjk.toLocaleString("en-US");
     const l = data.todayAdd.lat.toLocaleString("en-US");
+    const combined = primary.toLocaleString("en-US");
     const text =
       primary === 0
         ? t.statusTodayZero
-        : this.settings.includeLatinInPrimary
-          ? t.statusTodayCombined(primary.toLocaleString("en-US"))
+        : mode === "primary"
+          ? t.statusTodayCombined(combined)
           : t.statusToday(c, l);
     this.statusBar.setText(text + warn);
     this.statusBar.title =
@@ -416,6 +432,8 @@ export default class AbacusPlugin extends Plugin {
     const todaySum = sumWriting(entries, startOfDay(now), now + 1);
     const fileDel = sumDeletions(entries, startOfDay(now), now + 1).del;
     const todayDel = vec(todaySum.del.cjk + fileDel.cjk, todaySum.del.lat + fileDel.lat);
+    const rangeFrom = range === 0 ? 0 : range === 365 ? yearStart : chartFrom;
+    const rangeAdd = sumWriting(entries, rangeFrom, now + 1).add;
 
     const perDay = byDay(entries);
     const heat = buildYearHeatmap(year, perDay, now);
@@ -475,6 +493,7 @@ export default class AbacusPlugin extends Plugin {
       todayDel,
       weekAdd: sumWriting(entries, startOfWeek(now), now + 1).add,
       monthAdd: sumWriting(entries, startOfMonth(now), now + 1).add,
+      rangeAdd,
       total: this.store.total(),
       fileCount: this.store.size(),
       current: active && rec ? { path: active.path, vec: rec.vec } : undefined,
@@ -1153,12 +1172,21 @@ export default class AbacusPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     const raw = (await this.loadData()) as Partial<StatsSettings> | null;
+    const savedMode = raw?.statusBarMode;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, raw ?? {});
     if (!Array.isArray(this.settings.excludeFolders)) {
       this.settings.excludeFolders = [...DEFAULT_SETTINGS.excludeFolders];
     }
     if (!Array.isArray(this.settings.projectRules)) {
       this.settings.projectRules = [];
+    }
+    // 老配置没有三态字段：原先开启合并主指标的用户，默认落到“仅主数字”，外观不变
+    if (savedMode === undefined) {
+      this.settings.statusBarMode = this.settings.includeLatinInPrimary ? "primary" : "full";
+    }
+    const mode = this.settings.statusBarMode;
+    if (mode !== "full" && mode !== "primary" && mode !== "off") {
+      this.settings.statusBarMode = DEFAULT_SETTINGS.statusBarMode;
     }
   }
 

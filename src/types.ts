@@ -48,9 +48,14 @@ export interface CounterSettings {
   countCodeBlocks: boolean;
 }
 
+/** 状态栏显示方式：完整 / 仅主数字 / 隐藏 */
+export type StatusBarMode = "full" | "primary" | "off";
+
 export interface StatsSettings extends CounterSettings {
   /** 不参与统计的目录前缀（vault 相对路径） */
   excludeFolders: string[];
+  /** 状态栏显示方式 */
+  statusBarMode: StatusBarMode;
   /** 状态栏的今日主数字是否把英文词并入（面板始终分开显示） */
   includeLatinInPrimary: boolean;
   /** 是否把汉字数写回笔记 frontmatter（会修改笔记，默认关闭） */
@@ -81,6 +86,7 @@ export const DEFAULT_SETTINGS: StatsSettings = {
   countFrontmatter: false,
   countCodeBlocks: false,
   excludeFolders: [".trash"],
+  statusBarMode: "full",
   includeLatinInPrimary: false,
   writeFrontmatter: false,
   frontmatterKey: "words",

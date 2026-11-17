@@ -359,8 +359,11 @@ const zh = {
     rangeDays: (n) => `${n}天`,
     rangeYear: "全年",
     rangeCumulative: "累计",
+    rangeTotalSuffix: "合计",
+    rangeYearTotal: "全年合计",
+    rangeCumulativeTotal: "累计新增",
     cumulativeTip: (month, totalC, totalL, addC, addL) => `${month}　累计 汉字 ${totalC} / 英文词 ${totalL}（本月 +${addC} / +${addL}）`,
-    cumulativeNote: "自账本启用起累计新增，不含启用前的存量。",
+    cumulativeNote: "自账本启用起按月累计新增，不含启用前的存量。",
     heatTitle: (year) => `全年热力图 ${year}`,
     heatWeekdays: ["一", "三", "五"],
     monthShort: (m) => `${m}月`,
@@ -439,8 +442,13 @@ const zh = {
     sPropKey: "属性名",
     sPropKeyDesc: "默认 words。只写汉字数，英文词去账本里看。",
     sDisplay: "显示",
+    sStatusBar: "状态栏显示",
+    sStatusBarDesc: "选择底部状态栏显示今日进度的方式。隐藏后不影响面板与账本。",
+    sStatusFull: "完整（汉字 + 英文词）",
+    sStatusPrimary: "仅主数字",
+    sStatusOff: "隐藏",
     sLatinPrimary: "主指标包含英文词",
-    sLatinPrimaryDesc: "开启后状态栏的今日数字把英文词并入汉字，只显示一个合计；关闭时分别显示汉字和英文词。面板始终分开显示两个分量。",
+    sLatinPrimaryDesc: "只影响「仅主数字」模式：开启后把英文词并入汉字，只显示一个合计；关闭时只显示汉字。「完整」模式始终分开显示两个分量。",
     sGoals: "目标",
     sGoalsDesc: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
     sDailyGoal: "每日目标（汉字）",
@@ -506,8 +514,11 @@ const en = {
     rangeDays: (n) => `${n}d`,
     rangeYear: "Year",
     rangeCumulative: "Total",
+    rangeTotalSuffix: " total",
+    rangeYearTotal: "Year total",
+    rangeCumulativeTotal: "Cumulative additions",
     cumulativeTip: (month, totalC, totalL, addC, addL) => `${month}　total ${totalC} CJK / ${totalL} words (this month +${addC} / +${addL})`,
-    cumulativeNote: "Cumulative additions since the ledger started; excludes pre-existing notes.",
+    cumulativeNote: "Cumulative additions by month since the ledger started; excludes pre-existing notes.",
     heatTitle: (year) => `Yearly heatmap ${year}`,
     heatWeekdays: ["Mon", "Wed", "Fri"],
     monthShort: (m) => {
@@ -589,8 +600,13 @@ const en = {
     sPropKey: "Property name",
     sPropKeyDesc: "Defaults to words. Only the CJK count is written; see the ledger for the split.",
     sDisplay: "Display",
+    sStatusBar: "Status bar",
+    sStatusBarDesc: "Choose how today's progress appears in the status bar. Hiding it does not affect the panel or ledger.",
+    sStatusFull: "Full (CJK + words)",
+    sStatusPrimary: "Primary number only",
+    sStatusOff: "Hidden",
     sLatinPrimary: "Include English words in the primary metric",
-    sLatinPrimaryDesc: "When on, the status bar's today number folds English words into CJK and shows one total; when off, it shows both separately. The panel always shows both components.",
+    sLatinPrimaryDesc: "Affects the primary-only status bar mode: when on, English words are folded into CJK and one total is shown; when off, the primary number counts only CJK. The full mode always shows both components.",
     sGoals: "Goals",
     sGoalsDesc: "Counted in CJK characters. 0 or empty means no goal; with a goal the panel shows a progress bar and the weekly report gains a streak-of-goals row.",
     sDailyGoal: "Daily goal (CJK)",
@@ -749,6 +765,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
         this.statusBar.setText((0, i18n_1.L)().reading);
         this.statusBar.onclick = () => void this.activateView();
         this.statusBar.title = (0, i18n_1.L)().statusTitleClick;
+        this.syncStatusBarVisibility();
         this.addRibbonIcon("calculator", (0, i18n_1.L)().viewName, () => void this.activateView());
         this.addCommand({ id: "open-panel", name: (0, i18n_1.L)().cmdOpen, callback: () => void this.activateView() });
         this.addCommand({ id: "rebuild", name: (0, i18n_1.L)().cmdRebuild, callback: () => void this.rebuild() });
@@ -940,18 +957,32 @@ class AbacusPlugin extends obsidian_1.Plugin {
             health: (_a = this.health) !== null && _a !== void 0 ? _a : undefined,
         };
     }
-    updateStatusBar(data) {
+    syncStatusBarVisibility() {
         if (!this.statusBar)
+            return false;
+        if (this.settings.statusBarMode === "off") {
+            this.statusBar.style.display = "none";
+            this.statusBar.setText("");
+            this.statusBar.title = "";
+            return false;
+        }
+        this.statusBar.style.display = "";
+        return true;
+    }
+    updateStatusBar(data) {
+        if (!this.syncStatusBarVisibility())
             return;
         const t = (0, i18n_1.L)();
+        const mode = this.settings.statusBarMode;
         const primary = (0, types_1.primaryOf)(data.todayAdd, this.settings.includeLatinInPrimary);
         const warn = data.health && !data.health.ok ? " ⚠" : "";
         const c = data.todayAdd.cjk.toLocaleString("en-US");
         const l = data.todayAdd.lat.toLocaleString("en-US");
+        const combined = primary.toLocaleString("en-US");
         const text = primary === 0
             ? t.statusTodayZero
-            : this.settings.includeLatinInPrimary
-                ? t.statusTodayCombined(primary.toLocaleString("en-US"))
+            : mode === "primary"
+                ? t.statusTodayCombined(combined)
                 : t.statusToday(c, l);
         this.statusBar.setText(text + warn);
         this.statusBar.title =
@@ -979,6 +1010,8 @@ class AbacusPlugin extends obsidian_1.Plugin {
         const todaySum = (0, stats_1.sumWriting)(entries, (0, stats_1.startOfDay)(now), now + 1);
         const fileDel = (0, stats_1.sumDeletions)(entries, (0, stats_1.startOfDay)(now), now + 1).del;
         const todayDel = (0, types_1.vec)(todaySum.del.cjk + fileDel.cjk, todaySum.del.lat + fileDel.lat);
+        const rangeFrom = range === 0 ? 0 : range === 365 ? yearStart : chartFrom;
+        const rangeAdd = (0, stats_1.sumWriting)(entries, rangeFrom, now + 1).add;
         const perDay = (0, stats_1.byDay)(entries);
         const heat = (0, stats_1.buildYearHeatmap)(year, perDay, now);
         const days = [];
@@ -1029,6 +1062,7 @@ class AbacusPlugin extends obsidian_1.Plugin {
             todayDel,
             weekAdd: (0, stats_1.sumWriting)(entries, (0, stats_1.startOfWeek)(now), now + 1).add,
             monthAdd: (0, stats_1.sumWriting)(entries, (0, stats_1.startOfMonth)(now), now + 1).add,
+            rangeAdd,
             total: this.store.total(),
             fileCount: this.store.size(),
             current: active && rec ? { path: active.path, vec: rec.vec } : undefined,
@@ -1639,12 +1673,20 @@ class AbacusPlugin extends obsidian_1.Plugin {
     }
     async loadSettings() {
         const raw = (await this.loadData());
+        const savedMode = raw === null || raw === void 0 ? void 0 : raw.statusBarMode;
         this.settings = Object.assign({}, types_1.DEFAULT_SETTINGS, raw !== null && raw !== void 0 ? raw : {});
         if (!Array.isArray(this.settings.excludeFolders)) {
             this.settings.excludeFolders = [...types_1.DEFAULT_SETTINGS.excludeFolders];
         }
         if (!Array.isArray(this.settings.projectRules)) {
             this.settings.projectRules = [];
+        }
+        if (savedMode === undefined) {
+            this.settings.statusBarMode = this.settings.includeLatinInPrimary ? "primary" : "full";
+        }
+        const mode = this.settings.statusBarMode;
+        if (mode !== "full" && mode !== "primary" && mode !== "off") {
+            this.settings.statusBarMode = types_1.DEFAULT_SETTINGS.statusBarMode;
         }
     }
     async saveSettings() {
@@ -2132,6 +2174,18 @@ class StatsSettingTab extends obsidian_1.PluginSettingTab {
             await this.plugin.applySettings(["display"]);
         }));
         containerEl.createEl("h3", { text: t.sDisplay });
+        new obsidian_1.Setting(containerEl)
+            .setName(t.sStatusBar)
+            .setDesc(t.sStatusBarDesc)
+            .addDropdown((c) => c
+            .addOption("full", t.sStatusFull)
+            .addOption("primary", t.sStatusPrimary)
+            .addOption("off", t.sStatusOff)
+            .setValue(s.statusBarMode)
+            .onChange(async (v) => {
+            s.statusBarMode = v;
+            await this.plugin.applySettings(["display"]);
+        }));
         new obsidian_1.Setting(containerEl)
             .setName(t.sLatinPrimary)
             .setDesc(t.sLatinPrimaryDesc)
@@ -3086,6 +3140,7 @@ exports.DEFAULT_SETTINGS = {
     countFrontmatter: false,
     countCodeBlocks: false,
     excludeFolders: [".trash"],
+    statusBarMode: "full",
     includeLatinInPrimary: false,
     writeFrontmatter: false,
     frontmatterKey: "words",
@@ -3221,6 +3276,16 @@ class StatsView extends obsidian_1.ItemView {
                 text: t.goalText(fmt(d.todayAdd.cjk), fmt(d.dailyGoal), pct),
             });
         }
+        const totalLabel = d.range === 0
+            ? t.rangeCumulativeTotal
+            : d.range === 365
+                ? t.rangeYearTotal
+                : `${t.rangeDays(d.range)}${t.rangeTotalSuffix}`;
+        const rangeTotal = host.createDiv({ cls: "scs-range-total" });
+        rangeTotal.createSpan({ cls: "scs-range-total-label", text: totalLabel });
+        rangeTotal.createSpan({ cls: "scs-range-total-num", text: fmt(d.rangeAdd.cjk) });
+        rangeTotal.createSpan({ cls: "scs-range-total-unit", text: t.cjk });
+        rangeTotal.createSpan({ cls: "scs-range-total-sub", text: t.latinWords(fmt(d.rangeAdd.lat)) });
         const chartWrap = host.createDiv({ cls: "scs-chart-wrap" });
         const chart = chartWrap.createDiv({
             cls: "scs-chart" + (d.range === 90 || d.days.length > 24 ? " is-dense" : ""),

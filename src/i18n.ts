@@ -45,9 +45,12 @@ const zh = {
   rangeDays: (n: number) => `${n}天`,
   rangeYear: "全年",
   rangeCumulative: "累计",
+  rangeTotalSuffix: "合计",
+  rangeYearTotal: "全年合计",
+  rangeCumulativeTotal: "累计新增",
   cumulativeTip: (month: string, totalC: string, totalL: string, addC: string, addL: string) =>
     `${month}　累计 汉字 ${totalC} / 英文词 ${totalL}（本月 +${addC} / +${addL}）`,
-  cumulativeNote: "自账本启用起累计新增，不含启用前的存量。",
+  cumulativeNote: "自账本启用起按月累计新增，不含启用前的存量。",
   heatTitle: (year: number) => `全年热力图 ${year}`,
   heatWeekdays: ["一", "三", "五"],
   monthShort: (m: number) => `${m}月`,
@@ -143,9 +146,14 @@ const zh = {
   sPropKeyDesc: "默认 words。只写汉字数，英文词去账本里看。",
   // 设置：显示
   sDisplay: "显示",
+  sStatusBar: "状态栏显示",
+  sStatusBarDesc: "选择底部状态栏显示今日进度的方式。隐藏后不影响面板与账本。",
+  sStatusFull: "完整（汉字 + 英文词）",
+  sStatusPrimary: "仅主数字",
+  sStatusOff: "隐藏",
   sLatinPrimary: "主指标包含英文词",
   sLatinPrimaryDesc:
-    "开启后状态栏的今日数字把英文词并入汉字，只显示一个合计；关闭时分别显示汉字和英文词。面板始终分开显示两个分量。",
+    "只影响「仅主数字」模式：开启后把英文词并入汉字，只显示一个合计；关闭时只显示汉字。「完整」模式始终分开显示两个分量。",
   // 设置：目标
   sGoals: "目标",
   sGoalsDesc: "按汉字计。填 0 或留空表示不设目标；设了目标，面板会出现进度条，周报里会多一行达标天数。",
@@ -224,9 +232,12 @@ const en: Dict = {
   rangeDays: (n) => `${n}d`,
   rangeYear: "Year",
   rangeCumulative: "Total",
+  rangeTotalSuffix: " total",
+  rangeYearTotal: "Year total",
+  rangeCumulativeTotal: "Cumulative additions",
   cumulativeTip: (month, totalC, totalL, addC, addL) =>
     `${month}　total ${totalC} CJK / ${totalL} words (this month +${addC} / +${addL})`,
-  cumulativeNote: "Cumulative additions since the ledger started; excludes pre-existing notes.",
+  cumulativeNote: "Cumulative additions by month since the ledger started; excludes pre-existing notes.",
   heatTitle: (year) => `Yearly heatmap ${year}`,
   heatWeekdays: ["Mon", "Wed", "Fri"],
   monthShort: (m) =>
@@ -318,9 +329,14 @@ const en: Dict = {
   sPropKey: "Property name",
   sPropKeyDesc: "Defaults to words. Only the CJK count is written; see the ledger for the split.",
   sDisplay: "Display",
+  sStatusBar: "Status bar",
+  sStatusBarDesc: "Choose how today's progress appears in the status bar. Hiding it does not affect the panel or ledger.",
+  sStatusFull: "Full (CJK + words)",
+  sStatusPrimary: "Primary number only",
+  sStatusOff: "Hidden",
   sLatinPrimary: "Include English words in the primary metric",
   sLatinPrimaryDesc:
-    "When on, the status bar's today number folds English words into CJK and shows one total; when off, it shows both separately. The panel always shows both components.",
+    "Affects the primary-only status bar mode: when on, English words are folded into CJK and one total is shown; when off, the primary number counts only CJK. The full mode always shows both components.",
   sGoals: "Goals",
   sGoalsDesc:
     "Counted in CJK characters. 0 or empty means no goal; with a goal the panel shows a progress bar and the weekly report gains a streak-of-goals row.",

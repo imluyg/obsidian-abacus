@@ -65,6 +65,37 @@
   color: var(--text-faint);
 }
 
+/* 所选范围合计（7天/30天/90天/全年/累计） */
+.scs-range-total {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
+
+.scs-range-total-label {
+  color: var(--text-muted);
+}
+
+.scs-range-total-num {
+  color: var(--text-normal);
+  font-size: 1.3em;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.scs-range-total-unit {
+  color: var(--text-muted);
+}
+
+.scs-range-total-sub {
+  color: var(--text-faint);
+}
+
 .scs-chart-wrap {
   margin: 14px 0 6px;
   border-bottom: 1px solid var(--background-modifier-border);

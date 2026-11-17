@@ -39,6 +39,8 @@ export interface PanelData {
   todayDel: Vec;
   weekAdd: Vec;
   monthAdd: Vec;
+  /** 当前所选范围的合计新增 */
+  rangeAdd: Vec;
   total: Vec;
   fileCount: number;
   current?: { path: string; vec: Vec };
@@ -185,6 +187,19 @@ export class StatsView extends ItemView {
         text: t.goalText(fmt(d.todayAdd.cjk), fmt(d.dailyGoal), pct),
       });
     }
+
+    // 当前范围合计：图表上方的一行，随 7天 / 30天 / 90天 / 全年 / 累计切换
+    const totalLabel =
+      d.range === 0
+        ? t.rangeCumulativeTotal
+        : d.range === 365
+          ? t.rangeYearTotal
+          : `${t.rangeDays(d.range)}${t.rangeTotalSuffix}`;
+    const rangeTotal = host.createDiv({ cls: "scs-range-total" });
+    rangeTotal.createSpan({ cls: "scs-range-total-label", text: totalLabel });
+    rangeTotal.createSpan({ cls: "scs-range-total-num", text: fmt(d.rangeAdd.cjk) });
+    rangeTotal.createSpan({ cls: "scs-range-total-unit", text: t.cjk });
+    rangeTotal.createSpan({ cls: "scs-range-total-sub", text: t.latinWords(fmt(d.rangeAdd.lat)) });
 
     // 趋势图
     const chartWrap = host.createDiv({ cls: "scs-chart-wrap" });

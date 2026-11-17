@@ -91,6 +91,21 @@ export class StatsSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: t.sDisplay });
 
     new Setting(containerEl)
+      .setName(t.sStatusBar)
+      .setDesc(t.sStatusBarDesc)
+      .addDropdown((c) =>
+        c
+          .addOption("full", t.sStatusFull)
+          .addOption("primary", t.sStatusPrimary)
+          .addOption("off", t.sStatusOff)
+          .setValue(s.statusBarMode)
+          .onChange(async (v) => {
+            s.statusBarMode = v as StatsSettings["statusBarMode"];
+            await this.plugin.applySettings(["display"]);
+          })
+      );
+
+    new Setting(containerEl)
       .setName(t.sLatinPrimary)
       .setDesc(t.sLatinPrimaryDesc)
       .addToggle((c) =>
